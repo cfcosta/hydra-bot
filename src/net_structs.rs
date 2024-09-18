@@ -28,10 +28,10 @@ pub struct ConnectData {
 // Define other necessary structures and enums
 // For example, net_gamesettings_t equivalent:
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct GameSettings {
     pub ticdup: u8,
-    pub extractics: u8,
+    pub extratics: u8,
     pub deathmatch: u8,
     pub nomonsters: u8,
     pub fast_monsters: u8,
@@ -50,11 +50,10 @@ pub struct GameSettings {
     pub player_classes: [u8; 8], // NET_MAXPLAYERS is 8
 }
 
-// Constants
-
 pub const MAXNETNODES: usize = 16;
 pub const NET_MAXPLAYERS: usize = 8;
 pub const MAXPLAYERNAME: usize = 30;
+pub const BACKUPTICS: usize = 128;
 pub const NET_MAGIC_NUMBER: u32 = 1454104972;
 pub const NET_OLD_MAGIC_NUMBER: u32 = 3436803284;
 pub const NET_RELIABLE_PACKET: u16 = 1 << 15;
@@ -146,11 +145,9 @@ pub struct NetModule {
     pub resolve_address: fn(addr: &str) -> Option<NetAddr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NetPacket {
     pub data: Vec<u8>,
-    pub len: usize,
-    pub alloced: usize,
     pub pos: usize,
 }
 
@@ -281,14 +278,14 @@ impl NetPacket {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NetAddr {
     pub module: *mut NetModule,
     pub refcount: i32,
     pub handle: *mut std::ffi::c_void,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NetContext {
     // Define fields as necessary
 }
@@ -314,7 +311,7 @@ pub struct NetConnectData {
 #[derive(Debug)]
 pub struct NetGameSettings {
     pub ticdup: i32,
-    pub extractics: i32,
+    pub extratics: i32,
     pub deathmatch: i32,
     pub episode: i32,
     pub nomonsters: i32,

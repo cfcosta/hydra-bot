@@ -1,6 +1,6 @@
 use crate::net_packet::NetPacket;
 use crate::net_structs::{
-    ConnectData, GameSettings, NetAddr, NetConnection, NetContext, NetFullTiccmd, NetTicdiff,
+    ConnectData, GameSettings, NetAddr, NetConnection, NetContext, NetFullTicCmd, NetTicDiff,
     NetWaitdata, TicCmd,
 };
 use bincode::{deserialize, serialize};
@@ -8,7 +8,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 // Constants
 const NET_PACKET_TYPE_SYN: i16 = 0;
@@ -32,8 +32,9 @@ enum ClientState {
     DisconnectedSleep,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct NetClient {
+    start:  u64,
     connection: NetConnection,
     state: ClientState,
     server_addr: Option<NetAddr>,
@@ -43,10 +44,10 @@ pub struct NetClient {
     player_name: String,
     drone: bool,
     recv_window_start: u32,
-    recv_window: Vec<NetFullTiccmd>,
-    send_queue: Vec<NetTicdiff>,
+    recv_window: Vec<NetFullTicCmd>,
+    send_queue: Vec<NetTicDiff>,
     need_acknowledge: bool,
-    gamedata_recv_time: Instant,
+    gamedata_recv_time: u64,
     last_latency: i32,
     net_local_wad_sha1sum: [u8; 20],
     net_local_deh_sha1sum: [u8; 20],
@@ -61,56 +62,9 @@ pub struct NetClient {
 }
 
 impl NetClient {
-    // Implement methods here
-}
-
-// Implement Clone for NetConnection, NetContext, GameSettings, and NetWaitdata
-impl Clone for NetConnection {
-    fn clone(&self) -> Self {
-        // Implement clone for NetConnection
-        Self {
-            // Clone fields here
-        }
-    }
-}
-
-impl Clone for NetContext {
-    fn clone(&self) -> Self {
-        // Implement clone for NetContext
-        Self {
-            // Clone fields here
-        }
-    }
-}
-
-impl Clone for GameSettings {
-    fn clone(&self) -> Self {
-        // Implement clone for GameSettings
-        Self {
-            // Clone fields here
-        }
-    }
-}
-
-impl Clone for NetWaitdata {
-    fn clone(&self) -> Self {
-        // Implement clone for NetWaitdata
-        Self {
-            // Clone fields here
-        }
-    }
-}
-
-// Implement Default for Instant
-impl Default for Instant {
-    fn default() -> Self {
-        Instant::now()
-    }
-}
-
-impl NetClient {
     pub fn new(player_name: String, drone: bool) -> Self {
         NetClient {
+            start: Instant::now().duration_since(UNIX_EPOCH).as_secs(),
             connection: NetConnection::default(),
             state: ClientState::default(),
             server_addr: None,
@@ -120,10 +74,11 @@ impl NetClient {
             player_name,
             drone,
             recv_window_start: 0,
-            recv_window: vec![NetFullTiccmd::default(); BACKUPTICS],
-            send_queue: vec![NetTicdiff::default(); BACKUPTICS],
+            recv_window: vec![NetFullTicCmd::default(); BACKUPTICS],
+            send_queue: vec![NetTicDiff::default(); BACKUPTICS],
             need_acknowledge: false,
-            gamedata_recv_time: Instant::now(),
+            need_acknowledge: false,
+            gamedata_recv_time: 0,
             last_latency: 0,
             net_local_wad_sha1sum: [0; 20],
             net_local_deh_sha1sum: [0; 20],
@@ -133,6 +88,7 @@ impl NetClient {
             net_client_received_wait_data: false,
             net_client_wait_data: NetWaitdata::default(),
             last_send_time: Instant::now(),
+            last_send_time: 0,
             last_ticcmd: TicCmd::default(),
             recvwindow_cmd_base: vec![TicCmd::default(); NET_MAXPLAYERS],
         }
@@ -219,7 +175,7 @@ impl NetClient {
         while let Some((addr, packet_data)) = self.context.recv_packet() {
             if Some(addr.clone()) == self.server_addr {
                 let packet: NetPacket = deserialize(&packet_data).unwrap();
-                self.parse_packet(&packet);
+                self.parse_packet(&mut packet);
             }
         }
 
@@ -285,8 +241,19 @@ impl NetClient {
         }
     }
 
-    fn expand_tic_num(&self, relative: u32) -> u32 {
-        self.recv_window_start + relative
+    fn expand_tic_num(&self, b: u32) -> u32 {
+        let l = self.recv_window_start & 0xff;
+        let h = self.recv_window_start & !0xff;
+        let mut result = h | b;
+
+        if l < 0x40 && b > 0xb0 {
+            result = result.wrapping_sub(0x100);
+        }
+        if l > 0xb0 && b < 0x40 {
+            result = result.wrapping_add(0x100);
+        }
+
+        result
     }
 
     fn parse_syn(&mut self, packet: &mut NetPacket) {
@@ -420,8 +387,8 @@ impl NetClient {
             self.settings = Some(settings);
             self.recv_window_start = 0;
             // Reset recv_window and send_queue
-            self.recv_window = [NetFullTiccmd::default(); BACKUPTICS];
-            self.send_queue = [NetTicdiff::default(); BACKUPTICS];
+            self.recv_window = [NetFullTicCmd::default(); BACKUPTICS];
+            self.send_queue = [NetTicDiff::default(); BACKUPTICS];
         }
     }
 
@@ -449,7 +416,7 @@ impl NetClient {
             }
 
             self.need_acknowledge = true;
-            self.gamedata_recv_time = Instant::now();
+            self.gamedata_recv_time = Instant::now().duration_since(self.start);
 
             // Check for missing tics and request resends
             let resend_end = seq as i32 - self.recv_window_start as i32;
@@ -571,7 +538,7 @@ impl NetClient {
     }
 
     pub fn send_ticcmd(&mut self, ticcmd: &TicCmd, maketic: u32) {
-        let mut diff = NetTicdiff::default();
+        let mut diff = NetTicDiff::default();
         self.calculate_ticcmd_diff(ticcmd, &mut diff);
 
         let sendobj = &mut self.send_queue[maketic as usize % BACKUPTICS];
@@ -590,12 +557,41 @@ impl NetClient {
         self.send_tics(starttic, endtic);
     }
 
-    fn calculate_ticcmd_diff(&self, ticcmd: &TicCmd, diff: &mut NetTicdiff) {
-        // Implement the difference calculation between the current ticcmd and the last one
-        diff.forwardmove = ticcmd.forwardmove - self.last_ticcmd.forwardmove;
-        diff.sidemove = ticcmd.sidemove - self.last_ticcmd.sidemove;
-        diff.angleturn = ticcmd.angleturn - self.last_ticcmd.angleturn;
-        // ... other fields ...
+    fn calculate_ticcmd_diff(&self, ticcmd: &TicCmd, diff: &mut NetTicDiff) {
+        diff.diff = 0;
+        diff.cmd = *ticcmd;
+
+        if self.last_ticcmd.forwardmove != ticcmd.forwardmove {
+            diff.diff |= NET_TICDIFF_FORWARD;
+        }
+        if self.last_ticcmd.sidemove != ticcmd.sidemove {
+            diff.diff |= NET_TICDIFF_SIDE;
+        }
+        if self.last_ticcmd.angleturn != ticcmd.angleturn {
+            diff.diff |= NET_TICDIFF_TURN;
+        }
+        if self.last_ticcmd.buttons != ticcmd.buttons {
+            diff.diff |= NET_TICDIFF_BUTTONS;
+        }
+        if self.last_ticcmd.consistancy != ticcmd.consistancy {
+            diff.diff |= NET_TICDIFF_CONSISTANCY;
+        }
+        if ticcmd.chatchar != 0 {
+            diff.diff |= NET_TICDIFF_CHATCHAR;
+        } else {
+            diff.cmd.chatchar = 0;
+        }
+        if self.last_ticcmd.lookfly != ticcmd.lookfly || ticcmd.arti != 0 {
+            diff.diff |= NET_TICDIFF_RAVEN;
+        } else {
+            diff.cmd.arti = 0;
+        }
+        if self.last_ticcmd.buttons2 != ticcmd.buttons2 || ticcmd.inventory != 0 {
+            diff.diff |= NET_TICDIFF_STRIFE;
+        } else {
+            diff.cmd.inventory = 0;
+        }
+    }
     }
 
     fn advance_window(&mut self) {
@@ -612,7 +608,7 @@ impl NetClient {
 
             // Shift the window
             self.recv_window.rotate_left(1);
-            self.recv_window[BACKUPTICS - 1] = NetFullTiccmd::default();
+            self.recv_window[BACKUPTICS - 1] = NetFullTicCmd::default();
             self.recv_window_start += 1;
 
             println!(
@@ -624,7 +620,7 @@ impl NetClient {
 
     fn expand_full_ticcmd(
         &mut self,
-        cmd: &NetFullTiccmd,
+        cmd: &NetFullTicCmd,
         seq: u32,
         ticcmds: &mut [TicCmd; NET_MAXPLAYERS],
     ) {
@@ -641,7 +637,7 @@ impl NetClient {
         }
     }
 
-    fn apply_ticcmd_diff(&self, base: &mut TicCmd, diff: &NetTicdiff, result: &mut TicCmd) {
+    fn apply_ticcmd_diff(&self, base: &mut TicCmd, diff: &NetTicDiff, result: &mut TicCmd) {
         *result = *base;
 
         if diff.diff & NET_TICDIFF_FORWARD != 0 {
@@ -678,12 +674,44 @@ impl NetClient {
         }
     }
 
-    fn apply_ticcmd_diff(&self, base: &mut TicCmd, diff: &NetTicdiff, result: &mut TicCmd) {
-        // Apply the ticcmd diff to the base ticcmd
-        result.forwardmove = base.forwardmove + diff.forwardmove;
-        result.sidemove = base.sidemove + diff.sidemove;
-        result.angleturn = base.angleturn + diff.angleturn;
-        // ... apply other fields ...
+    fn apply_ticcmd_diff(&self, base: &TicCmd, diff: &NetTicDiff, result: &mut TicCmd) {
+        *result = *base;
+
+        if diff.diff & NET_TICDIFF_FORWARD != 0 {
+            result.forwardmove = diff.cmd.forwardmove;
+        }
+        if diff.diff & NET_TICDIFF_SIDE != 0 {
+            result.sidemove = diff.cmd.sidemove;
+        }
+        if diff.diff & NET_TICDIFF_TURN != 0 {
+            result.angleturn = diff.cmd.angleturn;
+        }
+        if diff.diff & NET_TICDIFF_BUTTONS != 0 {
+            result.buttons = diff.cmd.buttons;
+        }
+        if diff.diff & NET_TICDIFF_CONSISTANCY != 0 {
+            result.consistancy = diff.cmd.consistancy;
+        }
+        if diff.diff & NET_TICDIFF_CHATCHAR != 0 {
+            result.chatchar = diff.cmd.chatchar;
+        } else {
+            result.chatchar = 0;
+        }
+        if diff.diff & NET_TICDIFF_RAVEN != 0 {
+            result.lookfly = diff.cmd.lookfly;
+            result.arti = diff.cmd.arti;
+        } else {
+            result.lookfly = 0;
+            result.arti = 0;
+        }
+        if diff.diff & NET_TICDIFF_STRIFE != 0 {
+            result.buttons2 = diff.cmd.buttons2;
+            result.inventory = diff.cmd.inventory;
+        } else {
+            result.buttons2 = 0;
+            result.inventory = 0;
+        }
+    }
     }
 
     fn receive_tic(
@@ -981,19 +1009,26 @@ impl NetClient {
         self.state = ClientState::Disconnected;
     }
 
-    fn parse_packet(&mut self, packet: &mut NetPacket) {
-        if let Some(packet_type) = packet.read_i16() {
+    fn parse_packet(&mut self, packet: &NetPacket) {
+        let mut packet = packet.clone();
+        if let Some(packet_type) = packet.read_u16() {
+            let packet_type = packet_type & !NET_RELIABLE_PACKET;
             println!("Client: Received packet type: {}", packet_type);
-            match packet_type {
-                NET_PACKET_TYPE_SYN => self.parse_syn(packet),
-                NET_PACKET_TYPE_REJECTED => self.parse_reject(packet),
-                NET_PACKET_TYPE_WAITING_DATA => self.parse_waiting_data(packet),
-                NET_PACKET_TYPE_LAUNCH => self.parse_launch(packet),
-                NET_PACKET_TYPE_GAMESTART => self.parse_game_start(packet),
-                NET_PACKET_TYPE_GAMEDATA => self.parse_game_data(packet),
-                NET_PACKET_TYPE_GAMEDATA_RESEND => self.parse_resend_request(packet),
-                NET_PACKET_TYPE_CONSOLE_MESSAGE => self.parse_console_message(packet),
-                _ => println!("Client: Unknown packet type: {}", packet_type),
+
+            if self.connection.parse_packet(&mut packet, packet_type) {
+                // Packet handled by common connection code
+            } else {
+                match packet_type {
+                    NET_PACKET_TYPE_SYN => self.parse_syn(&mut packet),
+                    NET_PACKET_TYPE_REJECTED => self.parse_reject(&mut packet),
+                    NET_PACKET_TYPE_WAITING_DATA => self.parse_waiting_data(&mut packet),
+                    NET_PACKET_TYPE_LAUNCH => self.parse_launch(&mut packet),
+                    NET_PACKET_TYPE_GAMESTART => self.parse_game_start(&mut packet),
+                    NET_PACKET_TYPE_GAMEDATA => self.parse_game_data(&mut packet),
+                    NET_PACKET_TYPE_GAMEDATA_RESEND => self.parse_resend_request(&mut packet),
+                    NET_PACKET_TYPE_CONSOLE_MESSAGE => self.parse_console_message(&mut packet),
+                    _ => println!("Client: Unknown packet type: {}", packet_type),
+                }
             }
         }
     }
@@ -1297,7 +1332,7 @@ impl NetClient {
     }
 
     pub fn send_ticcmd(&mut self, ticcmd: &TicCmd, maketic: u32) {
-        let mut diff = NetTicdiff::default();
+        let mut diff = NetTicDiff::default();
         self.calculate_ticcmd_diff(ticcmd, &mut diff);
 
         let sendobj = &mut self.send_queue[maketic as usize % BACKUPTICS];
@@ -1316,7 +1351,7 @@ impl NetClient {
         self.send_tics(starttic, endtic);
     }
 
-    fn calculate_ticcmd_diff(&self, ticcmd: &TicCmd, diff: &mut NetTicdiff) {
+    fn calculate_ticcmd_diff(&self, ticcmd: &TicCmd, diff: &mut NetTicDiff) {
         // Implement the difference calculation between the current ticcmd and the last one
         // This is a placeholder implementation and should be replaced with actual logic
         diff.forwardmove = ticcmd.forwardmove;
@@ -1339,7 +1374,7 @@ impl NetClient {
 
             // Shift the window
             self.recv_window.rotate_left(1);
-            self.recv_window[BACKUPTICS - 1] = NetFullTiccmd::default();
+            self.recv_window[BACKUPTICS - 1] = NetFullTicCmd::default();
             self.recv_window_start += 1;
 
             println!(
@@ -1351,7 +1386,7 @@ impl NetClient {
 
     fn expand_full_ticcmd(
         &mut self,
-        cmd: &NetFullTiccmd,
+        cmd: &NetFullTicCmd,
         seq: u32,
         ticcmds: &mut [TicCmd; NET_MAXPLAYERS],
     ) {
@@ -1368,7 +1403,7 @@ impl NetClient {
         }
     }
 
-    fn apply_ticcmd_diff(&self, base: &mut TicCmd, diff: &NetTicdiff, result: &mut TicCmd) {
+    fn apply_ticcmd_diff(&self, base: &mut TicCmd, diff: &NetTicDiff, result: &mut TicCmd) {
         // Apply the ticcmd diff to the base ticcmd
         result.forwardmove = base.forwardmove + diff.forwardmove;
         result.sidemove = base.sidemove + diff.sidemove;
@@ -1478,9 +1513,8 @@ impl NetClient {
         self.connection.disconnect();
 
         let start_time = Instant::now();
-        while self.connection.state != ConnectionState::Disconnected
-            && self.connection.state != ConnectionState::DisconnectedSleep
-        {
+
+        while self.connection.state != ConnectionState::Disconnected {
             if start_time.elapsed() > Duration::from_secs(5) {
                 println!("Client: No acknowledgment of disconnect received");
                 self.state = ClientState::WaitingStart;
@@ -1523,7 +1557,7 @@ impl NetClient {
     }
 
     pub fn send_ticcmd(&mut self, ticcmd: &TicCmd, maketic: u32) {
-        let mut diff = NetTicdiff::default();
+        let mut diff = NetTicDiff::default();
         self.calculate_ticcmd_diff(ticcmd, &mut diff);
 
         let sendobj = &mut self.send_queue[maketic as usize % BACKUPTICS];
@@ -1544,7 +1578,7 @@ impl NetClient {
         self.send_tics(starttic, endtic);
     }
 
-    fn calculate_ticcmd_diff(&self, ticcmd: &TicCmd, diff: &mut NetTicdiff) {
+    fn calculate_ticcmd_diff(&self, ticcmd: &TicCmd, diff: &mut NetTicDiff) {
         diff.diff = 0;
         diff.cmd = *ticcmd;
 
@@ -1575,13 +1609,9 @@ impl NetClient {
     }
 }
 
-// Additional necessary definitions
-
-const BACKUPTICS: usize = 128;
-const NET_MAXPLAYERS: usize = 8;
-
-#[derive(Debug, PartialEq)]
+#[derive(Default, Debug, PartialEq)]
 enum ConnectionState {
+    #[default]
     Connecting,
     Connected,
     Disconnected,
@@ -1589,10 +1619,10 @@ enum ConnectionState {
 }
 
 #[derive(Default)]
-struct NetConnection {
-    state: ConnectionState,
-    protocol: Protocol,
-    connected: bool,
+pub struct NetConnection {
+    pub state: ConnectionState,
+    pub protocol: Protocol,
+    pub connected: bool,
 }
 
 impl NetConnection {
@@ -1622,118 +1652,11 @@ impl NetConnection {
     }
 }
 
-#[derive(Debug, PartialEq)]
-enum Protocol {
+#[derive(Debug, Default, PartialEq)]
+pub enum Protocol {
+    #[default]
     Unknown,
     // Other protocols as needed
-}
-
-impl NetPacket {
-    fn write_protocol_list(&mut self) {
-        // Write the list of supported protocols
-    }
-
-    fn write_connect_data(&mut self, data: &ConnectData) {
-        // Serialize and write connection data
-    }
-
-    fn read_protocol(&self) -> Protocol {
-        // Read and return the protocol
-        Protocol::Unknown
-    }
-
-    fn read_settings(&self) -> Option<GameSettings> {
-        // Read and return game settings
-        Some(GameSettings::default())
-    }
-
-    fn read_wait_data(&self) -> Option<NetWaitdata> {
-        // Read and return waiting data
-        Some(NetWaitdata::default())
-    }
-
-    fn read_full_ticcmd(&self) -> Option<NetFullTiccmd> {
-        // Read and return a full ticcmd
-        Some(NetFullTiccmd::default())
-    }
-
-    fn write_ticcmd_diff(&mut self, diff: &NetTicdiff) {
-        // Write the ticcmd difference into the packet
-    }
-}
-
-struct NetContext {
-    // Implementation of the network context
-}
-
-impl NetContext {
-    fn new() -> Self {
-        NetContext { /* Initialize fields */ }
-    }
-
-    fn recv_packet(&self) -> Option<(NetAddr, NetPacket)> {
-        // Receive and return a packet
-        None
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct NetAddr {
-    // Implementation of the network address
-}
-
-impl NetAddr {
-    fn clone(&self) -> Self {
-        NetAddr { /* Clone fields */ }
-    }
-}
-
-#[derive(Default)]
-struct GameSettings {
-    ticdup: u8,
-    extratics: u8,
-    deathmatch: u8,
-    nomonsters: u8,
-    fast_monsters: u8,
-    respawn_monsters: u8,
-    episode: u8,
-    map: u8,
-    skill: i8,
-    gameversion: u8,
-    lowres_turn: u8,
-    new_sync: u8,
-    timelimit: u32,
-    loadgame: i8,
-    random: u8,
-    num_players: u8,
-    consoleplayer: i8,
-    player_classes: [u8; 8],
-}
-
-#[derive(Clone, Default)]
-struct NetFullTiccmd {
-    latency: i32,
-    cmd: TicCmd,
-    playeringame: [bool; NET_MAXPLAYERS],
-    active: bool,
-    resend_time: Instant,
-}
-
-#[derive(Default, Clone, Default)]
-struct NetTicdiff {
-    diff: u32,
-    cmd: TicCmd,
-    active: bool,
-    seq: u32,
-    time: Instant,
-}
-
-#[derive(Default)]
-struct NetWaitdata {
-    num_players: u8,
-    max_players: u8,
-    ready_players: u8,
-    consoleplayer: i8,
 }
 
 #[cfg(test)]

@@ -33,6 +33,7 @@ impl NetPacket {
     }
 
     /// Writes an unsigned 8-bit integer to the packet.
+    /// Writes an unsigned 8-bit integer to the packet.
     pub fn write_u8(&mut self, value: u8) {
         self.data.push(value);
     }
@@ -42,6 +43,7 @@ impl NetPacket {
         self.data.push(value as u8);
     }
 
+    /// Writes an unsigned 16-bit integer in big-endian order to the packet.
     /// Writes an unsigned 16-bit integer in big-endian order to the packet.
     pub fn write_u16(&mut self, value: u16) {
         self.data.extend(&value.to_be_bytes());
