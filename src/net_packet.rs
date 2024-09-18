@@ -1,13 +1,14 @@
 use std::convert::TryInto;
+use std::fmt;
 
-/// Estructura que representa un paquete de red.
+/// Structure that represents a network packet.
 pub struct NetPacket {
     pub data: Vec<u8>,
     pub pos: usize,
 }
 
 impl NetPacket {
-    /// Crea un nuevo paquete de red con un tamaño inicial especificado.
+    /// Creates a new network packet with a specified initial size.
     pub fn new(initial_size: usize) -> Self {
         NetPacket {
             data: Vec::with_capacity(initial_size),
@@ -15,7 +16,7 @@ impl NetPacket {
         }
     }
 
-    /// Duplica un paquete de red existente.
+    /// Duplicates an existing network packet.
     pub fn dup(&self) -> Self {
         NetPacket {
             data: self.data.clone(),
@@ -23,51 +24,51 @@ impl NetPacket {
         }
     }
 
-    /// Libera el paquete de red.
-    /// En Rust no es necesario liberar manualmente la memoria,
-    /// pero se proporciona para mantener la compatibilidad con la implementación C.
+    /// Frees the network packet.
+    /// In Rust, manual memory management is not necessary,
+    /// but this method is provided to maintain compatibility with the C implementation.
     pub fn free(&mut self) {
         self.data.clear();
         self.pos = 0;
     }
 
-    /// Escribe un byte sin signo en el paquete.
+    /// Writes an unsigned 8-bit integer to the packet.
     pub fn write_u8(&mut self, value: u8) {
         self.data.push(value);
     }
 
-    /// Escribe un byte con signo en el paquete.
+    /// Writes a signed 8-bit integer to the packet.
     pub fn write_i8(&mut self, value: i8) {
         self.data.push(value as u8);
     }
 
-    /// Escribe un entero de 16 bits sin signo en orden big-endian.
+    /// Writes an unsigned 16-bit integer in big-endian order to the packet.
     pub fn write_u16(&mut self, value: u16) {
         self.data.extend(&value.to_be_bytes());
     }
 
-    /// Escribe un entero de 16 bits con signo en orden big-endian.
+    /// Writes a signed 16-bit integer in big-endian order to the packet.
     pub fn write_i16(&mut self, value: i16) {
         self.data.extend(&value.to_be_bytes());
     }
 
-    /// Escribe un entero de 32 bits sin signo en orden big-endian.
+    /// Writes an unsigned 32-bit integer in big-endian order to the packet.
     pub fn write_u32(&mut self, value: u32) {
         self.data.extend(&value.to_be_bytes());
     }
 
-    /// Escribe un entero de 32 bits con signo en orden big-endian.
+    /// Writes a signed 32-bit integer in big-endian order to the packet.
     pub fn write_i32(&mut self, value: i32) {
         self.data.extend(&value.to_be_bytes());
     }
 
-    /// Escribe una cadena de caracteres en el paquete, terminada con un NUL.
+    /// Writes a string to the packet, terminated with a NUL byte.
     pub fn write_string(&mut self, string: &str) {
         self.data.extend(string.as_bytes());
-        self.data.push(0); // Terminador NUL
+        self.data.push(0); // NUL terminator
     }
 
-    /// Lee un byte sin signo del paquete.
+    /// Reads an unsigned 8-bit integer from the packet.
     pub fn read_u8(&mut self) -> Option<u8> {
         if self.pos < self.data.len() {
             let value = self.data[self.pos];
@@ -78,12 +79,12 @@ impl NetPacket {
         }
     }
 
-    /// Lee un byte con signo del paquete.
+    /// Reads a signed 8-bit integer from the packet.
     pub fn read_i8(&mut self) -> Option<i8> {
         self.read_u8().map(|v| v as i8)
     }
 
-    /// Lee un entero de 16 bits sin signo en orden big-endian del paquete.
+    /// Reads an unsigned 16-bit integer in big-endian order from the packet.
     pub fn read_u16(&mut self) -> Option<u16> {
         if self.pos + 2 <= self.data.len() {
             let bytes = &self.data[self.pos..self.pos + 2];
@@ -94,12 +95,12 @@ impl NetPacket {
         }
     }
 
-    /// Lee un entero de 16 bits con signo en orden big-endian del paquete.
+    /// Reads a signed 16-bit integer in big-endian order from the packet.
     pub fn read_i16(&mut self) -> Option<i16> {
         self.read_u16().map(|v| v as i16)
     }
 
-    /// Lee un entero de 32 bits sin signo en orden big-endian del paquete.
+    /// Reads an unsigned 32-bit integer in big-endian order from the packet.
     pub fn read_u32(&mut self) -> Option<u32> {
         if self.pos + 4 <= self.data.len() {
             let bytes = &self.data[self.pos..self.pos + 4];
@@ -110,31 +111,47 @@ impl NetPacket {
         }
     }
 
-    /// Lee un entero de 32 bits con signo en orden big-endian del paquete.
+    /// Reads a signed 32-bit integer in big-endian order from the packet.
     pub fn read_i32(&mut self) -> Option<i32> {
         self.read_u32().map(|v| v as i32)
     }
 
-    /// Lee una cadena de caracteres del paquete.
-    /// Retorna `None` si no se encuentra un terminador NUL antes del final del paquete.
+    /// Reads a string from the packet.
+    /// Returns `None` if a terminating NUL byte is not found before the end of the packet.
     pub fn read_string(&mut self) -> Option<String> {
         if let Some(terminator) = self.data[self.pos..].iter().position(|&c| c == 0) {
             let bytes = &self.data[self.pos..self.pos + terminator];
             let string = String::from_utf8_lossy(bytes).into_owned();
-            self.pos += terminator + 1; // Salta el terminador NUL
+            self.pos += terminator + 1; // Skip the NUL terminator
             Some(string)
         } else {
             None
         }
     }
 
-    /// Lee una cadena de caracteres segura del paquete, filtrando caracteres no imprimibles.
+    /// Reads a safe string from the packet, filtering out non-printable characters.
+    /// Returns `None` if a terminating NUL byte is not found.
     pub fn read_safe_string(&mut self) -> Option<String> {
         self.read_string().map(|s| {
             s.chars()
                 .filter(|c| c.is_ascii_graphic() || c.is_whitespace())
                 .collect()
         })
+    }
+
+    /// Resets the reading position to the beginning of the packet.
+    pub fn reset(&mut self) {
+        self.pos = 0;
+    }
+}
+
+impl fmt::Debug for NetPacket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let data_str: Vec<String> = self.data.iter().map(|b| format!("{:02X}", b)).collect();
+        f.debug_struct("NetPacket")
+            .field("data", &data_str.join(" "))
+            .field("pos", &self.pos)
+            .finish()
     }
 }
 
@@ -146,31 +163,63 @@ mod tests {
     fn test_write_and_read_u8() {
         let mut packet = NetPacket::new(10);
         packet.write_u8(255);
-        packet.pos = 0;
+        packet.reset();
         assert_eq!(packet.read_u8(), Some(255));
+    }
+
+    #[test]
+    fn test_write_and_read_i8() {
+        let mut packet = NetPacket::new(10);
+        packet.write_i8(-128);
+        packet.reset();
+        assert_eq!(packet.read_i8(), Some(-128));
+    }
+
+    #[test]
+    fn test_write_and_read_u16() {
+        let mut packet = NetPacket::new(10);
+        packet.write_u16(65535);
+        packet.reset();
+        assert_eq!(packet.read_u16(), Some(65535));
     }
 
     #[test]
     fn test_write_and_read_i16() {
         let mut packet = NetPacket::new(10);
         packet.write_i16(-12345);
-        packet.pos = 0;
+        packet.reset();
         assert_eq!(packet.read_i16(), Some(-12345));
     }
 
     #[test]
-    fn test_write_and_read_string() {
+    fn test_write_and_read_u32() {
         let mut packet = NetPacket::new(10);
+        packet.write_u32(4294967295);
+        packet.reset();
+        assert_eq!(packet.read_u32(), Some(4294967295));
+    }
+
+    #[test]
+    fn test_write_and_read_i32() {
+        let mut packet = NetPacket::new(10);
+        packet.write_i32(-123456789);
+        packet.reset();
+        assert_eq!(packet.read_i32(), Some(-123456789));
+    }
+
+    #[test]
+    fn test_write_and_read_string() {
+        let mut packet = NetPacket::new(20);
         packet.write_string("Hello");
-        packet.pos = 0;
+        packet.reset();
         assert_eq!(packet.read_string(), Some("Hello".to_string()));
     }
 
     #[test]
-    fn test_read_safe_string() {
-        let mut packet = NetPacket::new(10);
-        packet.write_string("Hello\x00World");
-        packet.pos = 0;
+    fn test_write_and_read_safe_string() {
+        let mut packet = NetPacket::new(20);
+        packet.write_string("Hello\x00World\x1F!");
+        packet.reset();
         assert_eq!(packet.read_safe_string(), Some("Hello".to_string()));
     }
 
@@ -179,6 +228,37 @@ mod tests {
         let mut packet = NetPacket::new(10);
         packet.write_u8(100);
         let dup = packet.dup();
-        assert_eq!(dup.read_u8(), Some(100));
+        let mut dup_packet = dup;
+        assert_eq!(dup_packet.read_u8(), Some(100));
+    }
+
+    #[test]
+    fn test_free_packet() {
+        let mut packet = NetPacket::new(10);
+        packet.write_u8(50);
+        packet.free();
+        assert_eq!(packet.read_u8(), None);
+        assert_eq!(packet.data.len(), 0);
+        assert_eq!(packet.pos, 0);
+    }
+
+    #[test]
+    fn test_reset_position() {
+        let mut packet = NetPacket::new(10);
+        packet.write_u8(1);
+        packet.write_u8(2);
+        packet.reset();
+        assert_eq!(packet.read_u8(), Some(1));
+    }
+
+    #[test]
+    fn test_debug_trait() {
+        let mut packet = NetPacket::new(10);
+        packet.write_u8(0xAB);
+        packet.write_u8(0xCD);
+        packet.write_u8(0xEF);
+        packet.reset();
+        let debug_str = format!("{:?}", packet);
+        assert_eq!(debug_str, "NetPacket { data: \"AB CD EF\", pos: 0 }");
     }
 }
