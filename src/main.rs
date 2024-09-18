@@ -1,5 +1,4 @@
 #[allow(unused, dead_code)]
-
 mod net_client;
 mod net_packet;
 mod net_structs;

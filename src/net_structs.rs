@@ -1,4 +1,6 @@
-#[derive(Debug, Default, Clone, Copy)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct TicCmd {
     pub forwardmove: i8, // Movement forward/backward
     pub sidemove: i8,    // Movement sideways
@@ -12,7 +14,7 @@ pub struct TicCmd {
     pub arti: u8,        // Artifact type
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct ConnectData {
     pub gamemode: u8,
     pub gamemission: u8,
@@ -28,7 +30,7 @@ pub struct ConnectData {
 // Define other necessary structures and enums
 // For example, net_gamesettings_t equivalent:
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct GameSettings {
     pub ticdup: u8,
     pub extratics: u8,
@@ -70,8 +72,9 @@ pub const NET_TICDIFF_STRIFE: u32 = 1 << 7;
 
 // Enums
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NetProtocol {
+    #[default]
     ChocolateDoom0,
     // Add your own protocol here; be sure to add a name for it to the list in net_common.rs too.
     Unknown,
@@ -81,7 +84,7 @@ impl NetProtocol {
     pub const NUM_PROTOCOLS: usize = 2;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NetPacketType {
     Syn,
     Ack, // deprecated
@@ -102,7 +105,7 @@ pub enum NetPacketType {
     NatHolePunch,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NetMasterPacketType {
     Add,
     AddResponse,
@@ -120,7 +123,6 @@ pub enum NetMasterPacketType {
 
 // Structs corresponding to net_defs.h
 
-#[derive(Debug)]
 pub struct NetModule {
     // Initialize this module for use as a client
     pub init_client: fn() -> bool,
@@ -145,7 +147,7 @@ pub struct NetModule {
     pub resolve_address: fn(addr: &str) -> Option<NetAddr>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetPacket {
     pub data: Vec<u8>,
     pub pos: usize,
@@ -156,8 +158,6 @@ impl NetPacket {
     pub fn new(initial_size: usize) -> Self {
         NetPacket {
             data: Vec::with_capacity(initial_size),
-            len: 0,
-            alloced: initial_size,
             pos: 0,
         }
     }
@@ -166,8 +166,6 @@ impl NetPacket {
     pub fn dup(&self) -> Self {
         NetPacket {
             data: self.data.clone(),
-            len: self.len,
-            alloced: self.alloced,
             pos: self.pos,
         }
     }
@@ -176,50 +174,42 @@ impl NetPacket {
     pub fn free(&mut self) {
         self.data.clear();
         self.pos = 0;
-        self.len = 0;
     }
 
     /// Writes a byte to the packet.
     pub fn write_u8(&mut self, value: u8) {
         self.data.push(value);
-        self.len += 1;
     }
 
     /// Writes a signed byte to the packet.
     pub fn write_i8(&mut self, value: i8) {
         self.data.push(value as u8);
-        self.len += 1;
     }
 
     /// Writes a 16-bit unsigned integer to the packet.
     pub fn write_u16(&mut self, value: u16) {
         self.data.extend(&value.to_be_bytes());
-        self.len += 2;
     }
 
     /// Writes a 16-bit signed integer to the packet.
     pub fn write_i16(&mut self, value: i16) {
         self.data.extend(&value.to_be_bytes());
-        self.len += 2;
     }
 
     /// Writes a 32-bit unsigned integer to the packet.
     pub fn write_u32(&mut self, value: u32) {
         self.data.extend(&value.to_be_bytes());
-        self.len += 4;
     }
 
     /// Writes a 32-bit signed integer to the packet.
     pub fn write_i32(&mut self, value: i32) {
         self.data.extend(&value.to_be_bytes());
-        self.len += 4;
     }
 
     /// Writes a string to the packet with a NUL terminator.
     pub fn write_string(&mut self, string: &str) {
         self.data.extend(string.as_bytes());
         self.data.push(0); // NUL terminator
-        self.len += string.len() + 1;
     }
 
     /// Reads a byte from the packet.
@@ -285,16 +275,13 @@ pub struct NetAddr {
     pub handle: *mut std::ffi::c_void,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetContext {
     // Define fields as necessary
 }
 
-// Serialization and Deserialization implementations can be added as needed
-// for the structs defined above.
-
 // net_connect_data_t equivalent
-#[derive(Debug)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct NetConnectData {
     pub gamemode: i32,
     pub gamemission: i32,
@@ -308,7 +295,7 @@ pub struct NetConnectData {
 }
 
 // net_gamesettings_t equivalent
-#[derive(Debug)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct NetGameSettings {
     pub ticdup: i32,
     pub extratics: i32,
@@ -331,14 +318,14 @@ pub struct NetGameSettings {
 }
 
 // net_ticdiff_t equivalent
-#[derive(Debug)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct NetTicDiff {
     pub diff: u32,
     pub cmd: TicCmd,
 }
 
 // net_full_ticcmd_t equivalent
-#[derive(Debug)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct NetFullTicCmd {
     pub latency: i32,
     pub seq: u32,
@@ -347,7 +334,7 @@ pub struct NetFullTicCmd {
 }
 
 // net_querydata_t equivalent
-#[derive(Debug)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct NetQueryData {
     pub version: String,
     pub server_state: i32,
@@ -360,7 +347,7 @@ pub struct NetQueryData {
 }
 
 // net_waitdata_t equivalent
-#[derive(Debug)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct NetWaitData {
     pub num_players: i32,
     pub num_drones: i32,
