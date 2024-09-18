@@ -10,9 +10,6 @@ use sha1::{Sha1, Digest};
 use rand::Rng;
 use std::env;
 
-const BACKUPTICS: usize = 128;
-const NET_MAXPLAYERS: usize = 8;
-
 #[derive(Debug, PartialEq, Clone)]
 enum ClientState {
     WaitingLaunch,
@@ -53,80 +50,7 @@ pub struct NetClient {
     net_client_received_wait_data: bool,
     net_client_wait_data: NetWaitdata,
     last_send_time: Instant,
-    last_ticcmd: TicCmd,
-    recvwindow_cmd_base: [TicCmd; NET_MAXPLAYERS],
 }
-
-#[derive(Debug, PartialEq, Clone)]
-enum ClientState {
-    WaitingLaunch,
-    WaitingStart,
-    InGame,
-    Disconnected,
-    DisconnectedSleep,
-}
-
-impl NetClient {
-    pub fn open_log(&self) {
-        // Implement log opening logic
-        println!("Client: Opening log");
-    }
-
-    pub fn log(&self, message: &str) {
-        // Implement logging logic
-        println!("Client Log: {}", message);
-    }
-
-    pub fn log_packet(&self, packet: &NetPacket) {
-        // Implement packet logging logic
-        println!("Client: Logging packet");
-        // Log packet contents
-    }
-
-    fn set_reject_reason(&mut self, reason: Option<String>) {
-        self.reject_reason = reason;
-    }
-
-    fn get_random_pet_name() -> String {
-        let pet_names = ["Fluffy", "Buddy", "Max", "Charlie", "Lucy", "Bailey"];
-        let mut rng = rand::thread_rng();
-        pet_names[rng.gen_range(0..pet_names.len())].to_string()
-    }
-}
-
-pub fn net_bind_variables() {
-    // This function would typically bind variables to configuration settings
-    // In Rust, we might use a configuration management crate for this purpose
-    println!("Binding network variables");
-}
-
-pub struct NetClient {
-    connection: NetConnection,
-    state: ClientState,
-    server_addr: Option<NetAddr>,
-    context: NetContext,
-    settings: Option<GameSettings>,
-    reject_reason: Option<String>,
-    player_name: String,
-    drone: bool,
-    recv_window_start: u32,
-    recv_window: [NetFullTiccmd; BACKUPTICS],
-    send_queue: [NetTicdiff; BACKUPTICS],
-    need_acknowledge: bool,
-    gamedata_recv_time: Instant,
-    last_latency: i32,
-    net_local_wad_sha1sum: [u8; 20],
-    net_local_deh_sha1sum: [u8; 20],
-    net_local_is_freedoom: bool,
-    net_waiting_for_launch: bool,
-    net_client_connected: bool,
-    net_client_received_wait_data: bool,
-    net_client_wait_data: NetWaitdata,
-    last_send_time: Instant,
-}
-
-const BACKUPTICS: usize = 128;
-const NET_MAXPLAYERS: usize = 8;
 
 impl NetClient {
     pub fn new(player_name: String, drone: bool) -> Self {
@@ -189,51 +113,31 @@ impl NetClient {
         pet_names[rng.gen_range(0..pet_names.len())].to_string()
     }
 
-    pub fn connect(&mut self, addr: NetAddr, connect_data: ConnectData) -> bool {
-        self.server_addr = Some(addr.clone());
-        self.connection.init_client(&addr, &connect_data);
+    pub fn parse_syn(&mut self, packet: &NetPacket) {
+        println!("Client: Processing SYN response");
+        let server_version = packet.read_safe_string().unwrap_or_default();
+        let protocol = packet.read_protocol();
 
-        self.state = ClientState::Disconnected;
-        self.reject_reason = Some("Unknown reason".to_string());
-
-        self.net_local_wad_sha1sum.copy_from_slice(&connect_data.wad_sha1sum);
-        self.net_local_deh_sha1sum.copy_from_slice(&connect_data.deh_sha1sum);
-        self.net_local_is_freedoom = connect_data.is_freedoom;
-
-        self.net_client_connected = true;
-        self.net_client_received_wait_data = false;
-
-        let start_time = Instant::now();
-        self.last_send_time = Instant::now() - Duration::from_secs(1);
-
-        while self.connection.state == ConnectionState::Connecting {
-            let now = Instant::now();
-
-            if now.duration_since(self.last_send_time) > Duration::from_secs(1) {
-                self.send_syn(&connect_data);
-                self.last_send_time = now;
-            }
-
-            if now.duration_since(start_time) > Duration::from_secs(120) {
-                self.reject_reason = Some("No response from server".to_string());
-                break;
-            }
-
-            self.run();
-            thread::sleep(Duration::from_millis(1));
+        if protocol == Protocol::Unknown {
+            println!("Client: Error: No common protocol");
+            return;
         }
 
-        if self.connection.state == ConnectionState::Connected {
-            println!("Client: Successfully connected");
-            self.reject_reason = None;
-            self.state = ClientState::WaitingLaunch;
-            self.drone = connect_data.drone;
-            true
-        } else {
-            println!("Client: Connection failed");
-            self.shutdown();
-            false
+        println!("Client: Connected to server");
+        self.connection.state = ConnectionState::Connected;
+        self.connection.protocol = protocol;
+
+        if server_version != PACKAGE_STRING {
+            println!(
+                "Client: Warning: This is '{}', but the server is '{}'. \
+                It is possible that this mismatch may cause the game to desynchronize.",
+                PACKAGE_STRING, server_version
+            );
         }
+    }
+
+    pub fn set_reject_reason(&mut self, reason: Option<String>) {
+        self.reject_reason = reason;
     }
 
     fn send_syn(&self, data: &ConnectData) {
@@ -279,7 +183,7 @@ impl NetClient {
     }
 
     fn handle_disconnected(&mut self) {
-        self.state = ClientState::Disconnected;
+        self.receive_tic(&[TicCmd::default(); NET_MAXPLAYERS], &[false; NET_MAXPLAYERS]);
         self.shutdown();
     }
 
@@ -290,20 +194,33 @@ impl NetClient {
         self.state = ClientState::Disconnected;
     }
 
-    fn parse_packet(&mut self, packet: &NetPacket) {
-        if let Some(packet_type) = packet.read_i16() {
-            println!("Client: Received packet type: {}", packet_type);
-            match packet_type {
-                NET_PACKET_TYPE_SYN => self.parse_syn(packet),
-                NET_PACKET_TYPE_REJECTED => self.parse_reject(packet),
-                NET_PACKET_TYPE_WAITING_DATA => self.parse_waiting_data(packet),
-                NET_PACKET_TYPE_LAUNCH => self.parse_launch(packet),
-                NET_PACKET_TYPE_GAMESTART => self.parse_game_start(packet),
-                NET_PACKET_TYPE_GAMEDATA => self.parse_game_data(packet),
-                NET_PACKET_TYPE_GAMEDATA_RESEND => self.parse_resend_request(packet),
-                NET_PACKET_TYPE_CONSOLE_MESSAGE => self.parse_console_message(packet),
-                _ => println!("Client: Unknown packet type: {}", packet_type),
+    fn parse_reject(&mut self, packet: &NetPacket) {
+        if let Some(msg) = packet.read_safe_string() {
+            if self.connection.state == ConnectionState::Connecting {
+                self.connection.state = ConnectionState::Disconnected;
+                self.set_reject_reason(Some(msg));
             }
+        }
+    }
+
+    fn parse_waiting_data(&mut self, packet: &NetPacket) {
+        if let Some(wait_data) = packet.read_wait_data() {
+            if wait_data.num_players > wait_data.max_players
+                || wait_data.ready_players > wait_data.num_players
+                || wait_data.max_players > NET_MAXPLAYERS as u8
+            {
+                return;
+            }
+
+            if (wait_data.consoleplayer >= 0 && self.drone)
+                || (wait_data.consoleplayer < 0 && !self.drone)
+                || (wait_data.consoleplayer as usize >= wait_data.num_players as usize)
+            {
+                return;
+            }
+
+            self.net_client_wait_data = wait_data;
+            self.net_client_received_wait_data = true;
         }
     }
 
@@ -630,6 +547,43 @@ impl NetClient {
     }
 
     fn apply_ticcmd_diff(&self, base: &mut TicCmd, diff: &NetTicdiff, result: &mut TicCmd) {
+        *result = *base;
+
+        if diff.diff & NET_TICDIFF_FORWARD != 0 {
+            result.forwardmove = diff.cmd.forwardmove;
+        }
+        if diff.diff & NET_TICDIFF_SIDE != 0 {
+            result.sidemove = diff.cmd.sidemove;
+        }
+        if diff.diff & NET_TICDIFF_TURN != 0 {
+            result.angleturn = diff.cmd.angleturn;
+        }
+        if diff.diff & NET_TICDIFF_BUTTONS != 0 {
+            result.buttons = diff.cmd.buttons;
+        }
+        if diff.diff & NET_TICDIFF_CONSISTANCY != 0 {
+            result.consistancy = diff.cmd.consistancy;
+        }
+        if diff.diff & NET_TICDIFF_CHATCHAR != 0 {
+            result.chatchar = diff.cmd.chatchar;
+        } else {
+            result.chatchar = 0;
+        }
+        if diff.diff & NET_TICDIFF_RAVEN != 0 {
+            result.lookfly = diff.cmd.lookfly;
+            result.arti = diff.cmd.arti;
+        } else {
+            result.arti = 0;
+        }
+        if diff.diff & NET_TICDIFF_STRIFE != 0 {
+            result.buttons2 = diff.cmd.buttons2;
+            result.inventory = diff.cmd.inventory;
+        } else {
+            result.inventory = 0;
+        }
+    }
+
+    fn apply_ticcmd_diff(&self, base: &mut TicCmd, diff: &NetTicdiff, result: &mut TicCmd) {
         // Apply the ticcmd diff to the base ticcmd
         result.forwardmove = base.forwardmove + diff.forwardmove;
         result.sidemove = base.sidemove + diff.sidemove;
@@ -697,6 +651,14 @@ impl NetClient {
 
     fn generate_bot_ticcmd(&self, ticcmd: &mut TicCmd) {
         // Implement bot AI logic here
+        // Placeholder for bot commands
+        ticcmd.forwardmove = 50;
+        ticcmd.sidemove = 0;
+        ticcmd.angleturn = 0;
+    }
+
+    fn generate_bot_ticcmd(&self, ticcmd: &mut TicCmd) {
+        // Implement bot AI logic here
         // This is a placeholder implementation
         let mut rng = rand::thread_rng();
         ticcmd.forwardmove = rng.gen_range(-50..50);
@@ -729,6 +691,39 @@ impl NetClient {
 
         println!("Client: Disconnect complete");
         self.shutdown();
+    }
+
+    pub fn disconnect(&mut self) {
+        if !self.net_client_connected {
+            return;
+        }
+
+        println!("Client: Beginning disconnect");
+        self.connection.disconnect();
+
+        let start_time = Instant::now();
+        while self.connection.state != ConnectionState::Disconnected &&
+              self.connection.state != ConnectionState::DisconnectedSleep {
+            if start_time.elapsed() > Duration::from_secs(5) {
+                println!("Client: No acknowledgment of disconnect received");
+                self.state = ClientState::WaitingStart;
+                eprintln!("NET_CL_Disconnect: Timeout while disconnecting from server");
+                break;
+            }
+
+            self.run();
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        println!("Client: Disconnect complete");
+        self.shutdown();
+    }
+
+    fn shutdown(&mut self) {
+        if self.connection.connected {
+            self.connection.disconnect();
+        }
+        self.state = ClientState::Disconnected;
     }
 
     pub fn get_settings(&self) -> Option<GameSettings> {
@@ -1339,27 +1334,56 @@ impl NetClient {
         self.connection.send_reliable_packet(&serialized_packet);
     }
 
-    fn send_ticcmd(&mut self, ticcmd: &TicCmd, maketic: u32) {
-        // Calculate the difference to the last ticcmd
-        let diff = self.calculate_ticcmd_diff(ticcmd);
+    pub fn send_ticcmd(&mut self, ticcmd: &TicCmd, maketic: u32) {
+        let mut diff = NetTicdiff::default();
+        self.calculate_ticcmd_diff(ticcmd, &mut diff);
 
-        // Store in the send queue
-        self.send_queue[maketic as usize % BACKUPTICS] = diff;
+        let sendobj = &mut self.send_queue[maketic as usize % BACKUPTICS];
+        sendobj.active = true;
+        sendobj.seq = maketic;
+        sendobj.time = Instant::now();
+        sendobj.cmd = diff;
+
         println!("Client: Generated tic {}, sending", maketic);
 
-        // Send tics to the server
         let starttic = if maketic < self.settings.as_ref().unwrap().extratics as u32 {
             0
         } else {
             maketic - self.settings.as_ref().unwrap().extratics as u32
         };
         let endtic = maketic;
+
         self.send_tics(starttic, endtic);
     }
 
-    fn calculate_ticcmd_diff(&self, ticcmd: &TicCmd) -> NetTicdiff {
-        // Implement the difference between the current ticcmd and the last
-        NetTicdiff::default()
+    fn calculate_ticcmd_diff(&self, ticcmd: &TicCmd, diff: &mut NetTicdiff) {
+        diff.diff = 0;
+        diff.cmd = *ticcmd;
+
+        if self.last_ticcmd.forwardmove != ticcmd.forwardmove {
+            diff.diff |= NET_TICDIFF_FORWARD;
+        }
+        if self.last_ticcmd.sidemove != ticcmd.sidemove {
+            diff.diff |= NET_TICDIFF_SIDE;
+        }
+        if self.last_ticcmd.angleturn != ticcmd.angleturn {
+            diff.diff |= NET_TICDIFF_TURN;
+        }
+        if self.last_ticcmd.buttons != ticcmd.buttons {
+            diff.diff |= NET_TICDIFF_BUTTONS;
+        }
+        if self.last_ticcmd.consistancy != ticcmd.consistancy {
+            diff.diff |= NET_TICDIFF_CONSISTANCY;
+        }
+        if ticcmd.chatchar != 0 {
+            diff.diff |= NET_TICDIFF_CHATCHAR;
+        }
+        if self.last_ticcmd.lookfly != ticcmd.lookfly || ticcmd.arti != 0 {
+            diff.diff |= NET_TICDIFF_RAVEN;
+        }
+        if self.last_ticcmd.buttons2 != ticcmd.buttons2 || ticcmd.inventory != 0 {
+            diff.diff |= NET_TICDIFF_STRIFE;
+        }
     }
 }
 
