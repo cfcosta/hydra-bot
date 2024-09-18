@@ -50,6 +50,7 @@ pub struct ConnectData {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct GameSettings {
     pub ticdup: i32,
     pub extratics: i32,

@@ -287,8 +287,10 @@ impl NetClient {
                 seq, num_tics
             );
 
+            let lowres_turn = self.settings.as_ref().unwrap().lowres_turn != 0;
+
             for i in 0..num_tics {
-                if let Some(cmd) = packet.read_full_ticcmd() {
+                if let Some(cmd) = packet.read_full_ticcmd(lowres_turn) {
                     let index = (seq + i as u32 - self.recv_window_start) as usize;
                     if index < BACKUPTICS {
                         self.recv_window[index].active = true;
@@ -453,7 +455,7 @@ impl NetClient {
         for tic in start..=end {
             if let Some(send_obj) = self.send_queue.get(tic as usize % BACKUPTICS) {
                 packet.write_i16(self.last_latency.try_into().unwrap());
-                packet.write_ticcmd_diff(&send_obj.cmd);
+                packet.write_ticcmd_diff(&send_obj.cmd, self.settings.as_ref().unwrap().lowres_turn != 0);
             }
         }
 
