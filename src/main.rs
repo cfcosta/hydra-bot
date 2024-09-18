@@ -1,3 +1,8 @@
+mod net_client;
+mod net_packet;
+mod net_structs;
+
 fn main() {
-    println!("Hello, world!");
+    // Initialize the client and run it
+    net_client::run();
 }

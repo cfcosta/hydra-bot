@@ -1,5 +1,5 @@
 [package]
-name = "hydra-bot"
+name = "doom_bot_client"
 version = "0.1.0"
 edition = "2021"
 

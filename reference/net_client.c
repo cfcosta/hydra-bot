@@ -894,6 +894,9 @@ void NET_CL_Run(void)
     net_addr_t *addr;
     net_packet_t *packet;
 
+    // Run bot logic
+    NET_CL_RunBot();
+
     if (!net_client_connected) {
         return;
     }
@@ -1087,6 +1090,9 @@ void NET_CL_Disconnect(void)
 
 void NET_CL_Init(void)
 {
+    // Initialize bot
+    NET_CL_InitBot();
+
     // Try to set from the USER and USERNAME environment variables
     // Otherwise, fallback to "Player"
 
@@ -1109,3 +1115,27 @@ void NET_Init(void)
 }
 
 void NET_BindVariables(void) { M_BindStringVariable("player_name", &net_player_name); }
+
+void NET_CL_InitBot(void)
+{
+    // Initialize bot-specific settings
+    // e.g., set bot skill level
+}
+
+void NET_CL_RunBot(void)
+{
+    // Bot AI logic here
+    if (client_state == CLIENT_STATE_IN_GAME)
+    {
+        ticcmd_t bot_ticcmd;
+        int maketic;
+
+        maketic = recvwindow_start + BACKUPTICS;
+
+        // Initialize bot_ticcmd with AI decisions
+        // For example, set bot_ticcmd.forwardmove, bot_ticcmd.sidemove, etc.
+
+        // Send the bot ticcmd to the server
+        NET_CL_SendTiccmd(&bot_ticcmd, maketic);
+    }
+}
