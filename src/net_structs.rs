@@ -129,8 +129,7 @@ pub struct NetModule {
     pub resolve_address: fn(addr: &str) -> Option<NetAddr>,
 }
 
-#[derive(Debug, Clone)]
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NetAddr {
     pub module: *mut NetModule,
     pub refcount: i32,
@@ -141,6 +140,13 @@ pub struct NetAddr {
 #[derive(Default)]
 pub struct NetContext {
     // Define fields as necessary
+}
+
+impl NetContext {
+    pub fn recv_packet(&self) -> Option<(NetAddr, NetPacket)> {
+        // Implement the logic to receive a packet
+        None // Placeholder
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
@@ -283,19 +289,40 @@ impl NetConnection {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct NetServerRecv {
     pub active: bool,
-    pub resend_time: std::time::Instant,
+    pub resend_time: Instant,
     pub cmd: NetFullTicCmd,
 }
 
-#[derive(Default, Clone)]
+impl Default for NetServerRecv {
+    fn default() -> Self {
+        Self {
+            active: false,
+            resend_time: Instant::now(),
+            cmd: Default::default()
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct NetServerSend {
     pub active: bool,
     pub seq: u32,
-    pub time: std::time::Instant,
+    pub time: Instant,
     pub cmd: NetTicDiff,
+}
+
+impl Default for NetServerSend {
+    fn default() -> Self {
+        Self {
+            active: false,
+            seq: 0,
+            time: Instant::now(),
+            cmd: Default::default()
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

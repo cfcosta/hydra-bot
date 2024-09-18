@@ -117,9 +117,9 @@ impl NetClient {
             return;
         }
 
-        while let Some((addr, packet)) = self.context.recv_packet() {
+        while let Some((addr, mut packet)) = self.context.recv_packet() {
             if Some(addr) == self.server_addr {
-                self.parse_packet(&packet);
+                self.parse_packet(&mut packet);
             }
         }
 
@@ -416,7 +416,7 @@ impl NetClient {
         packet.write_i32(start as i32);
         packet.write_u8((end - start + 1) as u8);
 
-        self.connection.send_packet(&packet, self.server_addr.as_ref().unwrap());
+        self.connection.send_packet(&mut packet, self.server_addr.as_ref().unwrap());
 
         let now = Instant::now();
         for i in start..=end {
@@ -432,7 +432,7 @@ impl NetClient {
         packet.write_u16(NET_PACKET_TYPE_GAMEDATA_ACK);
         packet.write_u8((self.recv_window_start & 0xff) as u8);
 
-        self.connection.send_packet(&packet, self.server_addr.as_ref().unwrap());
+        self.connection.send_packet(&mut packet, self.server_addr.as_ref().unwrap());
         self.need_acknowledge = false;
         println!("Client: Game data acknowledgment sent");
     }
@@ -455,7 +455,7 @@ impl NetClient {
             }
         }
 
-        self.connection.send_packet(&packet, self.server_addr.as_ref().unwrap());
+        self.connection.send_packet(&mut packet, self.server_addr.as_ref().unwrap());
         self.need_acknowledge = false;
         println!("Client: Sent tics from {} to {}", start, end);
     }
@@ -725,7 +725,7 @@ impl NetClient {
     pub fn launch_game(&mut self) {
         let mut packet = NetPacket::new();
         packet.write_u16(NET_PACKET_TYPE_LAUNCH);
-        self.connection.send_reliable_packet(&packet);
+        self.connection.send_reliable_packet(&mut packet);
     }
 
     pub fn start_game(&mut self, settings: &GameSettings) {
@@ -734,7 +734,7 @@ impl NetClient {
         let mut packet = NetPacket::new();
         packet.write_u16(NET_PACKET_TYPE_GAMESTART);
         packet.write_settings(settings);
-        self.connection.send_reliable_packet(&packet);
+        self.connection.send_reliable_packet(&mut packet);
     }
 
     pub fn connect(&mut self, addr: NetAddr, connect_data: ConnectData) -> bool {
@@ -794,31 +794,11 @@ impl NetClient {
         packet.write_connect_data(data);
         packet.write_string(&self.player_name);
 
-        self.connection.send_packet(&packet, self.server_addr.as_ref().unwrap());
+        self.connection.send_packet(&mut packet, self.server_addr.as_ref().unwrap());
         println!("Client: SYN sent");
     }
 }
 
-impl Default for NetServerRecv {
-    fn default() -> Self {
-        NetServerRecv {
-            active: false,
-            resend_time: Instant::now(),
-            cmd: NetFullTicCmd::default(),
-        }
-    }
-}
-
-impl Default for NetServerSend {
-    fn default() -> Self {
-        NetServerSend {
-            active: false,
-            seq: 0,
-            time: Instant::now(),
-            cmd: NetTicDiff::default(),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -830,6 +810,4 @@ mod tests {
         assert_eq!(client.player_name, "Player1");
         assert_eq!(client.drone, false);
     }
-
-    // Other tests as needed
 }
