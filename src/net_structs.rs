@@ -130,6 +130,7 @@ pub struct NetModule {
 }
 
 #[derive(Debug, Clone)]
+#[derive(Clone, PartialEq)]
 pub struct NetAddr {
     pub module: *mut NetModule,
     pub refcount: i32,
@@ -137,6 +138,7 @@ pub struct NetAddr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct NetContext {
     // Define fields as necessary
 }
@@ -253,9 +255,47 @@ pub enum ClientState {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct NetConnection {
+    // Add necessary fields here
     pub state: ConnectionState,
     pub protocol: NetProtocol,
     pub connected: bool,
+}
+
+impl NetConnection {
+    pub fn run(&mut self) {
+        // Implement run logic
+    }
+
+    pub fn disconnect(&mut self) {
+        // Implement disconnect logic
+    }
+
+    pub fn send_packet(&self, packet: &NetPacket, addr: &NetAddr) {
+        // Implement send_packet logic
+    }
+
+    pub fn send_reliable_packet(&self, packet: &NetPacket) {
+        // Implement send_reliable_packet logic
+    }
+
+    pub fn init_client(&mut self, addr: &NetAddr, connect_data: &ConnectData) {
+        // Implement init_client logic
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct NetServerRecv {
+    pub active: bool,
+    pub resend_time: std::time::Instant,
+    pub cmd: NetFullTicCmd,
+}
+
+#[derive(Default, Clone)]
+pub struct NetServerSend {
+    pub active: bool,
+    pub seq: u32,
+    pub time: std::time::Instant,
+    pub cmd: NetTicDiff,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

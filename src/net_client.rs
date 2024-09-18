@@ -157,7 +157,7 @@ impl NetClient {
     }
 
     fn parse_packet(&mut self, packet: &mut NetPacket) {
-        let packet_type = packet.read_u17().unwrap();
+        let packet_type = packet.read_u16().unwrap();
 
         match packet_type {
             NET_PACKET_TYPE_SYN => self.parse_syn(packet),
@@ -209,7 +209,7 @@ impl NetClient {
         if let Some(wait_data) = packet.read_wait_data() {
             if wait_data.num_players > wait_data.max_players
                 || wait_data.ready_players > wait_data.num_players
-                || wait_data.max_players > NET_MAXPLAYERS as u8
+                || wait_data.max_players > NET_MAXPLAYERS as i32
             {
                 return;
             }
@@ -234,7 +234,7 @@ impl NetClient {
         }
 
         if let Some(num_players) = packet.read_u8() {
-            self.net_client_wait_data.num_players = num_players;
+            self.net_client_wait_data.num_players = num_players as i32;
             self.state = ClientState::WaitingStart;
             println!("Client: Now waiting to start the game");
         }
@@ -248,7 +248,7 @@ impl NetClient {
                 return;
             }
 
-            if settings.num_players > NET_MAXPLAYERS as u8
+            if settings.num_players > NET_MAXPLAYERS as i32
                 || settings.consoleplayer as usize >= settings.num_players as usize
             {
                 println!(
@@ -450,7 +450,7 @@ impl NetClient {
 
         for tic in start..=end {
             if let Some(send_obj) = self.send_queue.get(tic as usize % BACKUPTICS) {
-                packet.write_i16(self.last_latency);
+                packet.write_i16(self.last_latency.try_into().unwrap());
                 packet.write_ticcmd_diff(&send_obj.cmd);
             }
         }
@@ -553,7 +553,8 @@ impl NetClient {
 
             if cmd.playeringame[i] {
                 let diff = &cmd.cmds[i];
-                self.apply_ticcmd_diff(&mut self.recvwindow_cmd_base[i], diff, &mut ticcmds[i]);
+                let mut base = self.recvwindow_cmd_base[i];
+                self.apply_ticcmd_diff(&mut base, diff, &mut ticcmds[i]);
                 self.recvwindow_cmd_base[i] = ticcmds[i];
             }
         }
@@ -745,7 +746,7 @@ impl NetClient {
 
         self.net_local_wad_sha1sum.copy_from_slice(&connect_data.wad_sha1sum);
         self.net_local_deh_sha1sum.copy_from_slice(&connect_data.deh_sha1sum);
-        self.net_local_is_freedoom = connect_data.is_freedoom;
+        self.net_local_is_freedoom = connect_data.is_freedoom != 0;
 
         self.net_client_connected = true;
         self.net_client_received_wait_data = false;
@@ -775,7 +776,7 @@ impl NetClient {
             println!("Client: Successfully connected");
             self.reject_reason = None;
             self.state = ClientState::WaitingLaunch;
-            self.drone = connect_data.drone;
+            self.drone = connect_data.drone != 0;
             true
         } else {
             println!("Client: Connection failed");
