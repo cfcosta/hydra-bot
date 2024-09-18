@@ -809,21 +809,7 @@ impl NetClient {
     }
 }
 
-#[derive(Default, Debug, PartialEq)]
-enum ConnectionState {
-    #[default]
-    Connecting,
-    Connected,
-    Disconnected,
-    DisconnectedSleep,
-}
-
-#[derive(Default)]
-pub struct NetConnection {
-    pub state: ConnectionState,
-    pub protocol: NetProtocol,
-    pub connected: bool,
-}
+use crate::net_structs::*;
 
 impl NetConnection {
     fn new() -> Self {

@@ -128,7 +128,53 @@ impl NetPacket {
     pub fn reset(&mut self) {
         self.pos = 0;
     }
+
+    /// Reads a protocol from the packet.
+    pub fn read_protocol(&mut self) -> NetProtocol {
+        // Placeholder implementation
+        NetProtocol::Unknown
+    }
+
+    /// Writes a protocol list to the packet.
+    pub fn write_protocol_list(&mut self) {
+        // Placeholder implementation
+    }
+
+    /// Writes connect data to the packet.
+    pub fn write_connect_data(&mut self, _data: &ConnectData) {
+        // Placeholder implementation
+    }
+
+    /// Reads wait data from the packet.
+    pub fn read_wait_data(&mut self) -> Option<NetWaitData> {
+        // Placeholder implementation
+        None
+    }
+
+    /// Reads settings from the packet.
+    pub fn read_settings(&mut self) -> Option<GameSettings> {
+        // Placeholder implementation
+        None
+    }
+
+    /// Writes settings to the packet.
+    pub fn write_settings(&mut self, _settings: &GameSettings) {
+        // Placeholder implementation
+    }
+
+    /// Reads a full ticcmd from the packet.
+    pub fn read_full_ticcmd(&mut self) -> Option<NetFullTicCmd> {
+        // Placeholder implementation
+        None
+    }
+
+    /// Writes a ticcmd diff to the packet.
+    pub fn write_ticcmd_diff(&mut self, _diff: &NetTicDiff) {
+        // Placeholder implementation
+    }
 }
+
+use crate::net_structs::*;
 
 #[cfg(test)]
 mod tests {
