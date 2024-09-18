@@ -1,32 +1,38 @@
-use crate::net_packet::{NetPacket, NET_PACKET_TYPE_CONSOLE_MESSAGE, NET_PACKET_TYPE_GAMESTART, NET_PACKET_TYPE_GAMEDATA, NET_PACKET_TYPE_GAMEDATA_ACK, NET_PACKET_TYPE_GAMEDATA_RESEND, NET_PACKET_TYPE_LAUNCH, NET_PACKET_TYPE_REJECTED, NET_PACKET_TYPE_SYN, NET_DEF_MAGIC_NUMBER};
-use crate::net_structs::{ConnectData, GameSettings, NetGamesettings, NetAddr, NetConnection, NetContext, NetFullTiccmd, NetTicdiff, NetWaitdata};
-use crate::net_structs::TicCmd;
-use std::net::UdpSocket;
-use std::time::{Duration, Instant};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use bincode::{serialize, deserialize};
-use sha1::{Sha1, Digest};
+use crate::net_packet::NetPacket;
+use crate::net_structs::{
+    ConnectData, GameSettings, NetAddr, NetConnection, NetContext, NetFullTiccmd, NetTicdiff,
+    NetWaitdata, TicCmd,
+};
+use bincode::{deserialize, serialize};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use std::env;
+use std::thread;
+use std::time::{Duration, Instant};
 
-#[derive(Debug, PartialEq, Clone)]
+// Constants
+const NET_PACKET_TYPE_SYN: i16 = 0;
+const NET_PACKET_TYPE_REJECTED: i16 = 1;
+const NET_PACKET_TYPE_WAITING_DATA: i16 = 2;
+const NET_PACKET_TYPE_LAUNCH: i16 = 3;
+const NET_PACKET_TYPE_GAMESTART: i16 = 4;
+const NET_PACKET_TYPE_GAMEDATA: i16 = 5;
+const NET_PACKET_TYPE_GAMEDATA_ACK: i16 = 6;
+const NET_PACKET_TYPE_GAMEDATA_RESEND: i16 = 7;
+const NET_PACKET_TYPE_CONSOLE_MESSAGE: i16 = 8;
+const NET_DEF_MAGIC_NUMBER: i32 = 0x12345678;
+
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
 enum ClientState {
+    #[default]
+    Disconnected,
     WaitingLaunch,
     WaitingStart,
     InGame,
-    Disconnected,
     DisconnectedSleep,
 }
 
-#[derive(Debug, PartialEq, Clone)]
-enum ConnectionState {
-    Connecting,
-    Connected,
-    Disconnected,
-    DisconnectedSleep,
-}
-
+#[derive(Clone)]
 pub struct NetClient {
     connection: NetConnection,
     state: ClientState,
@@ -37,8 +43,8 @@ pub struct NetClient {
     player_name: String,
     drone: bool,
     recv_window_start: u32,
-    recv_window: [NetFullTiccmd; BACKUPTICS],
-    send_queue: [NetTicdiff; BACKUPTICS],
+    recv_window: Vec<NetFullTiccmd>,
+    send_queue: Vec<NetTicdiff>,
     need_acknowledge: bool,
     gamedata_recv_time: Instant,
     last_latency: i32,
@@ -50,13 +56,63 @@ pub struct NetClient {
     net_client_received_wait_data: bool,
     net_client_wait_data: NetWaitdata,
     last_send_time: Instant,
+    last_ticcmd: TicCmd,
+    recvwindow_cmd_base: Vec<TicCmd>,
+}
+
+impl NetClient {
+    // Implement methods here
+}
+
+// Implement Clone for NetConnection, NetContext, GameSettings, and NetWaitdata
+impl Clone for NetConnection {
+    fn clone(&self) -> Self {
+        // Implement clone for NetConnection
+        Self {
+            // Clone fields here
+        }
+    }
+}
+
+impl Clone for NetContext {
+    fn clone(&self) -> Self {
+        // Implement clone for NetContext
+        Self {
+            // Clone fields here
+        }
+    }
+}
+
+impl Clone for GameSettings {
+    fn clone(&self) -> Self {
+        // Implement clone for GameSettings
+        Self {
+            // Clone fields here
+        }
+    }
+}
+
+impl Clone for NetWaitdata {
+    fn clone(&self) -> Self {
+        // Implement clone for NetWaitdata
+        Self {
+            // Clone fields here
+        }
+    }
+}
+
+// Implement Default for Instant
+impl Default for Instant {
+    fn default() -> Self {
+        Instant::now()
+    }
 }
 
 impl NetClient {
     pub fn new(player_name: String, drone: bool) -> Self {
         NetClient {
-            connection: NetConnection::new(),
-            state: ClientState::Disconnected,
+            connection: NetConnection::default(),
+            state: ClientState::default(),
             server_addr: None,
             context: NetContext::new(),
             settings: None,
@@ -64,8 +120,8 @@ impl NetClient {
             player_name,
             drone,
             recv_window_start: 0,
-            recv_window: [NetFullTiccmd::default(); BACKUPTICS],
-            send_queue: [NetTicdiff::default(); BACKUPTICS],
+            recv_window: vec![NetFullTiccmd::default(); BACKUPTICS],
+            send_queue: vec![NetTicdiff::default(); BACKUPTICS],
             need_acknowledge: false,
             gamedata_recv_time: Instant::now(),
             last_latency: 0,
@@ -78,7 +134,7 @@ impl NetClient {
             net_client_wait_data: NetWaitdata::default(),
             last_send_time: Instant::now(),
             last_ticcmd: TicCmd::default(),
-            recvwindow_cmd_base: [TicCmd::default(); NET_MAXPLAYERS],
+            recvwindow_cmd_base: vec![TicCmd::default(); NET_MAXPLAYERS],
         }
     }
 
@@ -90,13 +146,11 @@ impl NetClient {
 
         // Try to set player name from environment variables or command line arguments
         if self.player_name.is_empty() {
-            self.player_name = env::args()
-                .nth(1)
-                .unwrap_or_else(|| {
-                    env::var("USER")
-                        .or_else(|_| env::var("USERNAME"))
-                        .unwrap_or_else(|_| NetClient::get_random_pet_name())
-                });
+            self.player_name = env::args().nth(1).unwrap_or_else(|| {
+                env::var("USER")
+                    .or_else(|_| env::var("USERNAME"))
+                    .unwrap_or_else(|_| NetClient::get_random_pet_name())
+            });
         }
     }
 
@@ -113,7 +167,7 @@ impl NetClient {
         pet_names[rng.gen_range(0..pet_names.len())].to_string()
     }
 
-    pub fn parse_syn(&mut self, packet: &NetPacket) {
+    pub fn parse_syn(&mut self, packet: &mut NetPacket) {
         println!("Client: Processing SYN response");
         let server_version = packet.read_safe_string().unwrap_or_default();
         let protocol = packet.read_protocol();
@@ -127,11 +181,11 @@ impl NetClient {
         self.connection.state = ConnectionState::Connected;
         self.connection.protocol = protocol;
 
-        if server_version != PACKAGE_STRING {
+        if server_version != "RustNetClient" {
             println!(
                 "Client: Warning: This is '{}', but the server is '{}'. \
                 It is possible that this mismatch may cause the game to desynchronize.",
-                PACKAGE_STRING, server_version
+                "RustNetClient", server_version
             );
         }
     }
@@ -141,7 +195,7 @@ impl NetClient {
     }
 
     fn send_syn(&self, data: &ConnectData) {
-        let mut packet = NetPacket::new();
+        let mut packet = NetPacket::new(128); // Use an appropriate initial size
         packet.write_i16(NET_PACKET_TYPE_SYN);
         packet.write_i32(NET_DEF_MAGIC_NUMBER);
         packet.write_string("RustNetClient"); // Equivalent to PACKAGE_STRING
@@ -150,7 +204,8 @@ impl NetClient {
         packet.write_string(&self.player_name);
 
         let serialized_packet = serialize(&packet).unwrap();
-        self.connection.send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
+        self.connection
+            .send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
         println!("Client: SYN sent");
     }
 
@@ -170,7 +225,9 @@ impl NetClient {
 
         self.connection.run();
 
-        if self.connection.state == ConnectionState::Disconnected || self.connection.state == ConnectionState::DisconnectedSleep {
+        if self.connection.state == ConnectionState::Disconnected
+            || self.connection.state == ConnectionState::DisconnectedSleep
+        {
             self.handle_disconnected();
         }
 
@@ -179,11 +236,15 @@ impl NetClient {
             self.check_resends();
         }
 
-        self.net_waiting_for_launch = self.connection.state == ConnectionState::Connected && self.state == ClientState::WaitingLaunch;
+        self.net_waiting_for_launch = self.connection.state == ConnectionState::Connected
+            && self.state == ClientState::WaitingLaunch;
     }
 
     fn handle_disconnected(&mut self) {
-        self.receive_tic(&[TicCmd::default(); NET_MAXPLAYERS], &[false; NET_MAXPLAYERS]);
+        self.receive_tic(
+            &[TicCmd::default(); NET_MAXPLAYERS],
+            &[false; NET_MAXPLAYERS],
+        );
         self.shutdown();
     }
 
@@ -194,7 +255,7 @@ impl NetClient {
         self.state = ClientState::Disconnected;
     }
 
-    fn parse_reject(&mut self, packet: &NetPacket) {
+    fn parse_reject(&mut self, packet: &mut NetPacket) {
         if let Some(msg) = packet.read_safe_string() {
             if self.connection.state == ConnectionState::Connecting {
                 self.connection.state = ConnectionState::Disconnected;
@@ -203,7 +264,7 @@ impl NetClient {
         }
     }
 
-    fn parse_waiting_data(&mut self, packet: &NetPacket) {
+    fn parse_waiting_data(&mut self, packet: &mut NetPacket) {
         if let Some(wait_data) = packet.read_wait_data() {
             if wait_data.num_players > wait_data.max_players
                 || wait_data.ready_players > wait_data.num_players
@@ -228,7 +289,7 @@ impl NetClient {
         self.recv_window_start + relative
     }
 
-    fn parse_syn(&mut self, packet: &NetPacket) {
+    fn parse_syn(&mut self, packet: &mut NetPacket) {
         println!("Client: Processing SYN response");
         let server_version = packet.read_string().unwrap_or_default();
         let protocol = packet.read_protocol();
@@ -255,7 +316,10 @@ impl NetClient {
         const KI: f32 = 0.01;
         const KD: f32 = 0.02;
 
-        let latency = self.send_queue[seq as usize % BACKUPTICS].time.elapsed().as_millis() as i32;
+        let latency = self.send_queue[seq as usize % BACKUPTICS]
+            .time
+            .elapsed()
+            .as_millis() as i32;
         let error = latency - remote_latency;
 
         // Update PID variables (these should be stored in the struct)
@@ -263,15 +327,19 @@ impl NetClient {
         let mut last_error = 0;
 
         cumul_error += error;
-        let offset_ms = (KP * error as f32 - KI * cumul_error as f32 + KD * (last_error - error) as f32) as i32;
+        let offset_ms =
+            (KP * error as f32 - KI * cumul_error as f32 + KD * (last_error - error) as f32) as i32;
 
         last_error = error;
         self.last_latency = latency;
 
-        println!("Client: Latency {}, remote {}, offset={}ms, cumul_error={}", latency, remote_latency, offset_ms, cumul_error);
+        println!(
+            "Client: Latency {}, remote {}, offset={}ms, cumul_error={}",
+            latency, remote_latency, offset_ms, cumul_error
+        );
     }
 
-    fn parse_reject(&mut self, packet: &NetPacket) {
+    fn parse_reject(&mut self, packet: &mut NetPacket) {
         if let Some(msg) = packet.read_string() {
             if self.connection.state == ConnectionState::Connecting {
                 self.connection.state = ConnectionState::Disconnected;
@@ -280,7 +348,7 @@ impl NetClient {
         }
     }
 
-    fn parse_waiting_data(&mut self, packet: &NetPacket) {
+    fn parse_waiting_data(&mut self, packet: &mut NetPacket) {
         if let Some(wait_data) = packet.read_wait_data() {
             if wait_data.num_players > wait_data.max_players
                 || wait_data.ready_players > wait_data.num_players
@@ -304,7 +372,7 @@ impl NetClient {
         }
     }
 
-    fn parse_launch(&mut self, packet: &NetPacket) {
+    fn parse_launch(&mut self, packet: &mut NetPacket) {
         println!("Client: Processing launch packet");
         if self.state != ClientState::WaitingLaunch {
             println!("Client: Error: Not in waiting launch state");
@@ -319,7 +387,7 @@ impl NetClient {
         }
     }
 
-    fn parse_game_start(&mut self, packet: &NetPacket) {
+    fn parse_game_start(&mut self, packet: &mut NetPacket) {
         println!("Client: Processing game start packet");
         if let Some(settings) = packet.read_settings() {
             if self.state != ClientState::WaitingStart {
@@ -327,7 +395,9 @@ impl NetClient {
                 return;
             }
 
-            if settings.num_players > NET_MAXPLAYERS as u8 || settings.consoleplayer as usize >= settings.num_players as usize {
+            if settings.num_players > NET_MAXPLAYERS as u8
+                || settings.consoleplayer as usize >= settings.num_players as usize
+            {
                 println!(
                     "Client: Error: Invalid settings, num_players={}, consoleplayer={}",
                     settings.num_players, settings.consoleplayer
@@ -355,12 +425,15 @@ impl NetClient {
         }
     }
 
-    fn parse_game_data(&mut self, packet: &NetPacket) {
+    fn parse_game_data(&mut self, packet: &mut NetPacket) {
         println!("Client: Processing game data packet");
 
         if let (Some(seq), Some(num_tics)) = (packet.read_i8(), packet.read_i8()) {
             let seq = self.expand_tic_num(seq as u32);
-            println!("Client: Game data received, seq={}, num_tics={}", seq, num_tics);
+            println!(
+                "Client: Game data received, seq={}, num_tics={}",
+                seq, num_tics
+            );
 
             for i in 0..num_tics {
                 if let Some(cmd) = packet.read_full_ticcmd() {
@@ -386,8 +459,10 @@ impl NetClient {
                     resend_start -= 1;
                 }
                 if resend_start < resend_end - 1 {
-                    self.send_resend_request(self.recv_window_start + resend_start as u32 + 1, 
-                                             self.recv_window_start + resend_end as u32 - 1);
+                    self.send_resend_request(
+                        self.recv_window_start + resend_start as u32 + 1,
+                        self.recv_window_start + resend_end as u32 - 1,
+                    );
                 }
             }
         }
@@ -398,10 +473,11 @@ impl NetClient {
         packet.write_i16(NET_PACKET_TYPE_GAMEDATA_RESEND);
         packet.write_i32(start as i32);
         packet.write_i8((end - start + 1) as i8);
-        
+
         let serialized_packet = serialize(&packet).unwrap();
-        self.connection.send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
-        
+        self.connection
+            .send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
+
         let now = Instant::now();
         for i in start..=end {
             let index = (i - self.recv_window_start) as usize;
@@ -411,7 +487,7 @@ impl NetClient {
         }
     }
 
-    fn parse_resend_request(&mut self, packet: &NetPacket) {
+    fn parse_resend_request(&mut self, packet: &mut NetPacket) {
         println!("Client: Processing resend request");
         if self.drone {
             println!("Client: Error: Resend request but we are a drone");
@@ -420,20 +496,25 @@ impl NetClient {
 
         if let (Some(start), Some(num_tics)) = (packet.read_i32(), packet.read_i8()) {
             let end = start + num_tics as i32 - 1;
-            println!("Client: Resend request: start={}, num_tics={}", start, num_tics);
+            println!(
+                "Client: Resend request: start={}, num_tics={}",
+                start, num_tics
+            );
 
             let mut resend_start = start as u32;
             let mut resend_end = end as u32;
 
-            while resend_start <= resend_end && 
-                  (!self.send_queue[resend_start as usize % BACKUPTICS].active || 
-                   self.send_queue[resend_start as usize % BACKUPTICS].seq != resend_start) {
+            while resend_start <= resend_end
+                && (!self.send_queue[resend_start as usize % BACKUPTICS].active
+                    || self.send_queue[resend_start as usize % BACKUPTICS].seq != resend_start)
+            {
                 resend_start += 1;
             }
 
-            while resend_start <= resend_end && 
-                  (!self.send_queue[resend_end as usize % BACKUPTICS].active || 
-                   self.send_queue[resend_end as usize % BACKUPTICS].seq != resend_end) {
+            while resend_start <= resend_end
+                && (!self.send_queue[resend_end as usize % BACKUPTICS].active
+                    || self.send_queue[resend_end as usize % BACKUPTICS].seq != resend_end)
+            {
                 resend_end -= 1;
             }
 
@@ -446,7 +527,7 @@ impl NetClient {
         }
     }
 
-    fn parse_console_message(&self, packet: &NetPacket) {
+    fn parse_console_message(&self, packet: &mut NetPacket) {
         if let Some(msg) = packet.read_string() {
             println!("Message from server:\n{}", msg);
         }
@@ -458,7 +539,8 @@ impl NetClient {
         packet.write_i8((self.recv_window_start & 0xff) as u8);
 
         let serialized_packet = serialize(&packet).unwrap();
-        self.connection.send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
+        self.connection
+            .send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
         self.need_acknowledge = false;
         println!("Client: Game data acknowledgment sent");
     }
@@ -482,7 +564,8 @@ impl NetClient {
         }
 
         let serialized_packet = serialize(&packet).unwrap();
-        self.connection.send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
+        self.connection
+            .send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
         self.need_acknowledge = false;
         println!("Client: Sent tics from {} to {}", start, end);
     }
@@ -518,8 +601,12 @@ impl NetClient {
     fn advance_window(&mut self) {
         while self.recv_window[0].active {
             let mut ticcmds = [TicCmd::default(); NET_MAXPLAYERS];
-            self.expand_full_ticcmd(&self.recv_window[0].cmd, self.recv_window_start, &mut ticcmds);
-            
+            self.expand_full_ticcmd(
+                &self.recv_window[0].cmd,
+                self.recv_window_start,
+                &mut ticcmds,
+            );
+
             // Call D_ReceiveTic or equivalent game state update function
             self.receive_tic(&ticcmds, &self.recv_window[0].cmd.playeringame);
 
@@ -528,11 +615,19 @@ impl NetClient {
             self.recv_window[BACKUPTICS - 1] = NetFullTiccmd::default();
             self.recv_window_start += 1;
 
-            println!("Client: Advanced receive window to {}", self.recv_window_start);
+            println!(
+                "Client: Advanced receive window to {}",
+                self.recv_window_start
+            );
         }
     }
 
-    fn expand_full_ticcmd(&mut self, cmd: &NetFullTiccmd, seq: u32, ticcmds: &mut [TicCmd; NET_MAXPLAYERS]) {
+    fn expand_full_ticcmd(
+        &mut self,
+        cmd: &NetFullTiccmd,
+        seq: u32,
+        ticcmds: &mut [TicCmd; NET_MAXPLAYERS],
+    ) {
         for i in 0..NET_MAXPLAYERS {
             if i == self.settings.as_ref().unwrap().consoleplayer as usize && !self.drone {
                 continue;
@@ -591,10 +686,17 @@ impl NetClient {
         // ... apply other fields ...
     }
 
-    fn receive_tic(&self, ticcmds: &[TicCmd; NET_MAXPLAYERS], playeringame: &[bool; NET_MAXPLAYERS]) {
+    fn receive_tic(
+        &self,
+        ticcmds: &[TicCmd; NET_MAXPLAYERS],
+        playeringame: &[bool; NET_MAXPLAYERS],
+    ) {
         // This function should update the game state with the new ticcmds
         // It's a placeholder for the actual game logic update
-        println!("Client: Received tic data for {} players", playeringame.iter().filter(|&&p| p).count());
+        println!(
+            "Client: Received tic data for {} players",
+            playeringame.iter().filter(|&&p| p).count()
+        );
     }
 
     fn check_resends(&mut self) {
@@ -605,9 +707,14 @@ impl NetClient {
 
         for i in 0..BACKUPTICS {
             let recvobj = &mut self.recv_window[i];
-            let need_resend = !recvobj.active && recvobj.resend_time.elapsed() > Duration::from_millis(300);
+            let need_resend =
+                !recvobj.active && recvobj.resend_time.elapsed() > Duration::from_millis(300);
 
-            if i == 0 && !recvobj.active && recvobj.resend_time.elapsed() > Duration::from_secs(1) && maybe_deadlocked {
+            if i == 0
+                && !recvobj.active
+                && recvobj.resend_time.elapsed() > Duration::from_secs(1)
+                && maybe_deadlocked
+            {
                 let need_resend = true;
             }
 
@@ -617,25 +724,38 @@ impl NetClient {
                 }
                 resend_end = i as i32;
             } else if resend_start >= 0 {
-                println!("Client: Resend request timed out for {}-{}", 
-                         self.recv_window_start + resend_start as u32,
-                         self.recv_window_start + resend_end as u32);
-                self.send_resend_request(self.recv_window_start + resend_start as u32, 
-                                         self.recv_window_start + resend_end as u32);
+                println!(
+                    "Client: Resend request timed out for {}-{}",
+                    self.recv_window_start + resend_start as u32,
+                    self.recv_window_start + resend_end as u32
+                );
+                self.send_resend_request(
+                    self.recv_window_start + resend_start as u32,
+                    self.recv_window_start + resend_end as u32,
+                );
                 resend_start = -1;
             }
         }
 
         if resend_start >= 0 {
-            println!("Client: Resend request timed out for {}-{}", 
-                     self.recv_window_start + resend_start as u32,
-                     self.recv_window_start + resend_end as u32);
-            self.send_resend_request(self.recv_window_start + resend_start as u32, 
-                                     self.recv_window_start + resend_end as u32);
+            println!(
+                "Client: Resend request timed out for {}-{}",
+                self.recv_window_start + resend_start as u32,
+                self.recv_window_start + resend_end as u32
+            );
+            self.send_resend_request(
+                self.recv_window_start + resend_start as u32,
+                self.recv_window_start + resend_end as u32,
+            );
         }
 
-        if self.need_acknowledge && now.duration_since(self.gamedata_recv_time) > Duration::from_millis(200) {
-            println!("Client: No game data received since {:?}: triggering ack", self.gamedata_recv_time);
+        if self.need_acknowledge
+            && now.duration_since(self.gamedata_recv_time) > Duration::from_millis(200)
+        {
+            println!(
+                "Client: No game data received since {:?}: triggering ack",
+                self.gamedata_recv_time
+            );
             self.send_game_data_ack();
         }
     }
@@ -676,8 +796,9 @@ impl NetClient {
         self.connection.disconnect();
 
         let start_time = Instant::now();
-        while self.connection.state != ConnectionState::Disconnected && 
-              self.connection.state != ConnectionState::DisconnectedSleep {
+        while self.connection.state != ConnectionState::Disconnected
+            && self.connection.state != ConnectionState::DisconnectedSleep
+        {
             if start_time.elapsed() > Duration::from_secs(5) {
                 println!("Client: No acknowledgment of disconnect received");
                 self.state = ClientState::WaitingStart;
@@ -702,8 +823,9 @@ impl NetClient {
         self.connection.disconnect();
 
         let start_time = Instant::now();
-        while self.connection.state != ConnectionState::Disconnected &&
-              self.connection.state != ConnectionState::DisconnectedSleep {
+        while self.connection.state != ConnectionState::Disconnected
+            && self.connection.state != ConnectionState::DisconnectedSleep
+        {
             if start_time.elapsed() > Duration::from_secs(5) {
                 println!("Client: No acknowledgment of disconnect received");
                 self.state = ClientState::WaitingStart;
@@ -757,8 +879,10 @@ impl NetClient {
         self.state = ClientState::Disconnected;
         self.reject_reason = Some("Unknown reason".to_string());
 
-        self.net_local_wad_sha1sum.copy_from_slice(&connect_data.wad_sha1sum);
-        self.net_local_deh_sha1sum.copy_from_slice(&connect_data.deh_sha1sum);
+        self.net_local_wad_sha1sum
+            .copy_from_slice(&connect_data.wad_sha1sum);
+        self.net_local_deh_sha1sum
+            .copy_from_slice(&connect_data.deh_sha1sum);
         self.net_local_is_freedoom = connect_data.is_freedoom;
 
         self.net_client_connected = true;
@@ -808,7 +932,8 @@ impl NetClient {
         packet.write_string(&self.player_name);
 
         let serialized_packet = serialize(&packet).unwrap();
-        self.connection.send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
+        self.connection
+            .send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
         println!("Client: SYN sent");
     }
 
@@ -828,7 +953,9 @@ impl NetClient {
 
         self.connection.run();
 
-        if self.connection.state == ConnectionState::Disconnected || self.connection.state == ConnectionState::DisconnectedSleep {
+        if self.connection.state == ConnectionState::Disconnected
+            || self.connection.state == ConnectionState::DisconnectedSleep
+        {
             self.handle_disconnected();
         }
 
@@ -837,7 +964,8 @@ impl NetClient {
             self.check_resends();
         }
 
-        self.net_waiting_for_launch = self.connection.state == ConnectionState::Connected && self.state == ClientState::WaitingLaunch;
+        self.net_waiting_for_launch = self.connection.state == ConnectionState::Connected
+            && self.state == ClientState::WaitingLaunch;
     }
 
     fn handle_disconnected(&mut self) {
@@ -853,7 +981,7 @@ impl NetClient {
         self.state = ClientState::Disconnected;
     }
 
-    fn parse_packet(&mut self, packet: &NetPacket) {
+    fn parse_packet(&mut self, packet: &mut NetPacket) {
         if let Some(packet_type) = packet.read_i16() {
             println!("Client: Received packet type: {}", packet_type);
             match packet_type {
@@ -874,7 +1002,7 @@ impl NetClient {
         self.recv_window_start + relative
     }
 
-    fn parse_syn(&mut self, packet: &NetPacket) {
+    fn parse_syn(&mut self, packet: &mut NetPacket) {
         println!("Client: Processing SYN response");
         let server_version = packet.read_string().unwrap_or_default();
         let protocol = packet.read_protocol();
@@ -902,7 +1030,10 @@ impl NetClient {
         const KI: f32 = 0.01;
         const KD: f32 = 0.02;
 
-        let latency = self.send_queue[seq as usize % BACKUPTICS].time.elapsed().as_millis() as i32;
+        let latency = self.send_queue[seq as usize % BACKUPTICS]
+            .time
+            .elapsed()
+            .as_millis() as i32;
         let error = latency - remote_latency;
 
         // Update PID variables (these should be stored in the struct)
@@ -910,15 +1041,19 @@ impl NetClient {
         let mut last_error = 0;
 
         cumul_error += error;
-        let offset_ms = (KP * error as f32 - KI * cumul_error as f32 + KD * (last_error - error) as f32) as i32;
+        let offset_ms =
+            (KP * error as f32 - KI * cumul_error as f32 + KD * (last_error - error) as f32) as i32;
 
         last_error = error;
         self.last_latency = latency;
 
-        println!("Client: Latency {}, remote {}, offset={}ms, cumul_error={}", latency, remote_latency, offset_ms, cumul_error);
+        println!(
+            "Client: Latency {}, remote {}, offset={}ms, cumul_error={}",
+            latency, remote_latency, offset_ms, cumul_error
+        );
     }
 
-    fn parse_reject(&mut self, packet: &NetPacket) {
+    fn parse_reject(&mut self, packet: &mut NetPacket) {
         if let Some(msg) = packet.read_string() {
             if self.connection.state == ConnectionState::Connecting {
                 self.connection.state = ConnectionState::Disconnected;
@@ -927,7 +1062,7 @@ impl NetClient {
         }
     }
 
-    fn parse_waiting_data(&mut self, packet: &NetPacket) {
+    fn parse_waiting_data(&mut self, packet: &mut NetPacket) {
         if let Some(wait_data) = packet.read_wait_data() {
             if wait_data.num_players > wait_data.max_players
                 || wait_data.ready_players > wait_data.num_players
@@ -951,7 +1086,7 @@ impl NetClient {
         }
     }
 
-    fn parse_launch(&mut self, packet: &NetPacket) {
+    fn parse_launch(&mut self, packet: &mut NetPacket) {
         println!("Client: Processing launch packet");
         if self.state != ClientState::WaitingLaunch {
             println!("Client: Error: Not in waiting launch state");
@@ -966,7 +1101,7 @@ impl NetClient {
         }
     }
 
-    fn parse_game_start(&mut self, packet: &NetPacket) {
+    fn parse_game_start(&mut self, packet: &mut NetPacket) {
         println!("Client: Processing game start packet");
         if let Some(settings) = packet.read_settings() {
             if self.state != ClientState::WaitingStart {
@@ -974,7 +1109,9 @@ impl NetClient {
                 return;
             }
 
-            if settings.num_players > NET_MAXPLAYERS || settings.consoleplayer as usize >= settings.num_players as usize {
+            if settings.num_players > NET_MAXPLAYERS
+                || settings.consoleplayer as usize >= settings.num_players as usize
+            {
                 println!(
                     "Client: Error: Invalid settings, num_players={}, consoleplayer={}",
                     settings.num_players, settings.consoleplayer
@@ -1000,12 +1137,15 @@ impl NetClient {
         }
     }
 
-    fn parse_game_data(&mut self, packet: &NetPacket) {
+    fn parse_game_data(&mut self, packet: &mut NetPacket) {
         println!("Client: Processing game data packet");
 
         if let (Some(seq), Some(num_tics)) = (packet.read_i8(), packet.read_i8()) {
             let seq = self.expand_tic_num(seq as u32);
-            println!("Client: Game data received, seq={}, num_tics={}", seq, num_tics);
+            println!(
+                "Client: Game data received, seq={}, num_tics={}",
+                seq, num_tics
+            );
 
             for i in 0..num_tics {
                 if let Some(cmd) = packet.read_full_ticcmd() {
@@ -1031,8 +1171,10 @@ impl NetClient {
                     resend_start -= 1;
                 }
                 if resend_start < resend_end - 1 {
-                    self.send_resend_request(self.recv_window_start + resend_start as u32 + 1, 
-                                             self.recv_window_start + resend_end as u32 - 1);
+                    self.send_resend_request(
+                        self.recv_window_start + resend_start as u32 + 1,
+                        self.recv_window_start + resend_end as u32 - 1,
+                    );
                 }
             }
         }
@@ -1043,10 +1185,11 @@ impl NetClient {
         packet.write_i16(NET_PACKET_TYPE_GAMEDATA_RESEND);
         packet.write_i32(start as i32);
         packet.write_i8((end - start + 1) as i8);
-        
+
         let serialized_packet = serialize(&packet).unwrap();
-        self.connection.send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
-        
+        self.connection
+            .send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
+
         let now = Instant::now();
         for i in start..=end {
             let index = (i - self.recv_window_start) as usize;
@@ -1056,7 +1199,7 @@ impl NetClient {
         }
     }
 
-    fn parse_resend_request(&mut self, packet: &NetPacket) {
+    fn parse_resend_request(&mut self, packet: &mut NetPacket) {
         println!("Client: Processing resend request");
         if self.drone {
             println!("Client: Error: Resend request but we are a drone");
@@ -1065,20 +1208,25 @@ impl NetClient {
 
         if let (Some(start), Some(num_tics)) = (packet.read_i32(), packet.read_i8()) {
             let end = start + num_tics as i32 - 1;
-            println!("Client: Resend request: start={}, num_tics={}", start, num_tics);
+            println!(
+                "Client: Resend request: start={}, num_tics={}",
+                start, num_tics
+            );
 
             let mut resend_start = start as u32;
             let resend_end = end as u32;
 
-            while resend_start <= resend_end && 
-                  (!self.send_queue[resend_start as usize % BACKUPTICS].active || 
-                   self.send_queue[resend_start as usize % BACKUPTICS].seq != resend_start) {
+            while resend_start <= resend_end
+                && (!self.send_queue[resend_start as usize % BACKUPTICS].active
+                    || self.send_queue[resend_start as usize % BACKUPTICS].seq != resend_start)
+            {
                 resend_start += 1;
             }
 
-            while resend_start <= resend_end && 
-                  (!self.send_queue[resend_end as usize % BACKUPTICS].active || 
-                   self.send_queue[resend_end as usize % BACKUPTICS].seq != resend_end) {
+            while resend_start <= resend_end
+                && (!self.send_queue[resend_end as usize % BACKUPTICS].active
+                    || self.send_queue[resend_end as usize % BACKUPTICS].seq != resend_end)
+            {
                 resend_end -= 1;
             }
 
@@ -1091,7 +1239,7 @@ impl NetClient {
         }
     }
 
-    fn parse_console_message(&self, packet: &NetPacket) {
+    fn parse_console_message(&self, packet: &mut NetPacket) {
         if let Some(msg) = packet.read_string() {
             println!("Message from server:\n{}", msg);
         }
@@ -1117,7 +1265,8 @@ impl NetClient {
         packet.write_i16(NET_PACKET_TYPE_GAMEDATA_ACK);
         packet.write_i8((self.recv_window_start & 0xff) as u8);
 
-        self.connection.send_packet(&packet, self.server_addr.as_ref().unwrap());
+        self.connection
+            .send_packet(&packet, self.server_addr.as_ref().unwrap());
         self.need_acknowledge = false;
         println!("Client: Game data acknowledgment sent");
     }
@@ -1141,7 +1290,8 @@ impl NetClient {
         }
 
         let serialized_packet = serialize(&packet).unwrap();
-        self.connection.send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
+        self.connection
+            .send_packet(&serialized_packet, self.server_addr.as_ref().unwrap());
         self.need_acknowledge = false;
         println!("Client: Sent tics from {} to {}", start, end);
     }
@@ -1178,8 +1328,12 @@ impl NetClient {
     fn advance_window(&mut self) {
         while self.recv_window[0].active {
             let mut ticcmds = [TicCmd::default(); NET_MAXPLAYERS];
-            self.expand_full_ticcmd(&self.recv_window[0].cmd, self.recv_window_start, &mut ticcmds);
-            
+            self.expand_full_ticcmd(
+                &self.recv_window[0].cmd,
+                self.recv_window_start,
+                &mut ticcmds,
+            );
+
             // Call D_ReceiveTic or equivalent game state update function
             self.receive_tic(&ticcmds, &self.recv_window[0].cmd.playeringame);
 
@@ -1188,11 +1342,19 @@ impl NetClient {
             self.recv_window[BACKUPTICS - 1] = NetFullTiccmd::default();
             self.recv_window_start += 1;
 
-            println!("Client: Advanced receive window to {}", self.recv_window_start);
+            println!(
+                "Client: Advanced receive window to {}",
+                self.recv_window_start
+            );
         }
     }
 
-    fn expand_full_ticcmd(&mut self, cmd: &NetFullTiccmd, seq: u32, ticcmds: &mut [TicCmd; NET_MAXPLAYERS]) {
+    fn expand_full_ticcmd(
+        &mut self,
+        cmd: &NetFullTiccmd,
+        seq: u32,
+        ticcmds: &mut [TicCmd; NET_MAXPLAYERS],
+    ) {
         for i in 0..NET_MAXPLAYERS {
             if i == self.settings.as_ref().unwrap().consoleplayer as usize && !self.drone {
                 continue;
@@ -1214,10 +1376,17 @@ impl NetClient {
         // ... apply other fields ...
     }
 
-    fn receive_tic(&self, ticcmds: &[TicCmd; NET_MAXPLAYERS], playeringame: &[bool; NET_MAXPLAYERS]) {
+    fn receive_tic(
+        &self,
+        ticcmds: &[TicCmd; NET_MAXPLAYERS],
+        playeringame: &[bool; NET_MAXPLAYERS],
+    ) {
         // This function should update the game state with the new ticcmds
         // It's a placeholder for the actual game logic update
-        println!("Client: Received tic data for {} players", playeringame.iter().filter(|&&p| p).count());
+        println!(
+            "Client: Received tic data for {} players",
+            playeringame.iter().filter(|&&p| p).count()
+        );
     }
 
     fn check_resends(&mut self) {
@@ -1228,9 +1397,14 @@ impl NetClient {
 
         for i in 0..BACKUPTICS {
             let recvobj = &mut self.recv_window[i];
-            let need_resend = !recvobj.active && recvobj.resend_time.elapsed() > Duration::from_millis(300);
+            let need_resend =
+                !recvobj.active && recvobj.resend_time.elapsed() > Duration::from_millis(300);
 
-            if i == 0 && !recvobj.active && recvobj.resend_time.elapsed() > Duration::from_secs(1) && maybe_deadlocked {
+            if i == 0
+                && !recvobj.active
+                && recvobj.resend_time.elapsed() > Duration::from_secs(1)
+                && maybe_deadlocked
+            {
                 let need_resend = true;
             }
 
@@ -1240,25 +1414,38 @@ impl NetClient {
                 }
                 resend_end = i as i32;
             } else if resend_start >= 0 {
-                println!("Client: Resend request timed out for {}-{}", 
-                         self.recv_window_start + resend_start as u32,
-                         self.recv_window_start + resend_end as u32);
-                self.send_resend_request(self.recv_window_start + resend_start as u32, 
-                                         self.recv_window_start + resend_end as u32);
+                println!(
+                    "Client: Resend request timed out for {}-{}",
+                    self.recv_window_start + resend_start as u32,
+                    self.recv_window_start + resend_end as u32
+                );
+                self.send_resend_request(
+                    self.recv_window_start + resend_start as u32,
+                    self.recv_window_start + resend_end as u32,
+                );
                 resend_start = -1;
             }
         }
 
         if resend_start >= 0 {
-            println!("Client: Resend request timed out for {}-{}", 
-                     self.recv_window_start + resend_start as u32,
-                     self.recv_window_start + resend_end as u32);
-            self.send_resend_request(self.recv_window_start + resend_start as u32, 
-                                     self.recv_window_start + resend_end as u32);
+            println!(
+                "Client: Resend request timed out for {}-{}",
+                self.recv_window_start + resend_start as u32,
+                self.recv_window_start + resend_end as u32
+            );
+            self.send_resend_request(
+                self.recv_window_start + resend_start as u32,
+                self.recv_window_start + resend_end as u32,
+            );
         }
 
-        if self.need_acknowledge && now.duration_since(self.gamedata_recv_time) > Duration::from_millis(200) {
-            println!("Client: No game data received since {:?}: triggering ack", self.gamedata_recv_time);
+        if self.need_acknowledge
+            && now.duration_since(self.gamedata_recv_time) > Duration::from_millis(200)
+        {
+            println!(
+                "Client: No game data received since {:?}: triggering ack",
+                self.gamedata_recv_time
+            );
             self.send_game_data_ack();
         }
     }
@@ -1291,8 +1478,9 @@ impl NetClient {
         self.connection.disconnect();
 
         let start_time = Instant::now();
-        while self.connection.state != ConnectionState::Disconnected && 
-              self.connection.state != ConnectionState::DisconnectedSleep {
+        while self.connection.state != ConnectionState::Disconnected
+            && self.connection.state != ConnectionState::DisconnectedSleep
+        {
             if start_time.elapsed() > Duration::from_secs(5) {
                 println!("Client: No acknowledgment of disconnect received");
                 self.state = ClientState::WaitingStart;
@@ -1420,7 +1608,7 @@ impl NetConnection {
         // Initialize client connection
     }
 
-    fn send_packet(&self, packet: &NetPacket, addr: &NetAddr) {
+    fn send_packet(&self, packet: &mut NetPacket, addr: &NetAddr) {
         // Send packet to server
     }
 
@@ -1522,15 +1710,22 @@ struct GameSettings {
     player_classes: [u8; 8],
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct NetFullTiccmd {
-    // Implementation of a full ticcmd
     latency: i32,
+    cmd: TicCmd,
+    playeringame: [bool; NET_MAXPLAYERS],
+    active: bool,
+    resend_time: Instant,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Default)]
 struct NetTicdiff {
-    // Implementation of the ticcmd difference
+    diff: u32,
+    cmd: TicCmd,
+    active: bool,
+    seq: u32,
+    time: Instant,
 }
 
 #[derive(Default)]
