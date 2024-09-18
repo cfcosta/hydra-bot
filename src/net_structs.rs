@@ -1,4 +1,6 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+
+use crate::net_packet::NetPacket;
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct TicCmd {
@@ -145,127 +147,6 @@ pub struct NetModule {
 
     // Try to resolve a name to an address
     pub resolve_address: fn(addr: &str) -> Option<NetAddr>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetPacket {
-    pub data: Vec<u8>,
-    pub pos: usize,
-}
-
-impl NetPacket {
-    /// Creates a new network packet with a specified initial size.
-    pub fn new(initial_size: usize) -> Self {
-        NetPacket {
-            data: Vec::with_capacity(initial_size),
-            pos: 0,
-        }
-    }
-
-    /// Duplicates an existing network packet.
-    pub fn dup(&self) -> Self {
-        NetPacket {
-            data: self.data.clone(),
-            pos: self.pos,
-        }
-    }
-
-    /// Frees the network packet.
-    pub fn free(&mut self) {
-        self.data.clear();
-        self.pos = 0;
-    }
-
-    /// Writes a byte to the packet.
-    pub fn write_u8(&mut self, value: u8) {
-        self.data.push(value);
-    }
-
-    /// Writes a signed byte to the packet.
-    pub fn write_i8(&mut self, value: i8) {
-        self.data.push(value as u8);
-    }
-
-    /// Writes a 16-bit unsigned integer to the packet.
-    pub fn write_u16(&mut self, value: u16) {
-        self.data.extend(&value.to_be_bytes());
-    }
-
-    /// Writes a 16-bit signed integer to the packet.
-    pub fn write_i16(&mut self, value: i16) {
-        self.data.extend(&value.to_be_bytes());
-    }
-
-    /// Writes a 32-bit unsigned integer to the packet.
-    pub fn write_u32(&mut self, value: u32) {
-        self.data.extend(&value.to_be_bytes());
-    }
-
-    /// Writes a 32-bit signed integer to the packet.
-    pub fn write_i32(&mut self, value: i32) {
-        self.data.extend(&value.to_be_bytes());
-    }
-
-    /// Writes a string to the packet with a NUL terminator.
-    pub fn write_string(&mut self, string: &str) {
-        self.data.extend(string.as_bytes());
-        self.data.push(0); // NUL terminator
-    }
-
-    /// Reads a byte from the packet.
-    pub fn read_u8(&mut self) -> Option<u8> {
-        if self.pos < self.data.len() {
-            let value = self.data[self.pos];
-            self.pos += 1;
-            Some(value)
-        } else {
-            None
-        }
-    }
-
-    /// Reads a signed byte from the packet.
-    pub fn read_i8(&mut self) -> Option<i8> {
-        self.read_u8().map(|v| v as i8)
-    }
-
-    /// Reads a 16-bit unsigned integer from the packet.
-    pub fn read_u16(&mut self) -> Option<u16> {
-        if self.pos + 2 <= self.data.len() {
-            let bytes = &self.data[self.pos..self.pos + 2];
-            self.pos += 2;
-            Some(u16::from_be_bytes(bytes.try_into().unwrap()))
-        } else {
-            None
-        }
-    }
-
-    /// Reads a 32-bit unsigned integer from the packet.
-    pub fn read_u32(&mut self) -> Option<u32> {
-        if self.pos + 4 <= self.data.len() {
-            let bytes = &self.data[self.pos..self.pos + 4];
-            self.pos += 4;
-            Some(u32::from_be_bytes(bytes.try_into().unwrap()))
-        } else {
-            None
-        }
-    }
-
-    /// Reads a string from the packet.
-    pub fn read_string(&mut self) -> Option<String> {
-        if let Some(terminator) = self.data[self.pos..].iter().position(|&c| c == 0) {
-            let bytes = &self.data[self.pos..self.pos + terminator];
-            let string = String::from_utf8_lossy(bytes).into_owned();
-            self.pos += terminator + 1; // Skip the NUL terminator
-            Some(string)
-        } else {
-            None
-        }
-    }
-
-    /// Resets the read/write position of the packet.
-    pub fn reset(&mut self) {
-        self.pos = 0;
-    }
 }
 
 #[derive(Debug, Clone)]

@@ -1,14 +1,15 @@
-use crate::net_packet::NetPacket;
-use crate::net_structs::{
-    ConnectData, GameSettings, NetAddr, NetConnection, NetContext, NetFullTicCmd, NetTicDiff,
-    NetWaitdata, TicCmd,
-};
 use bincode::{deserialize, serialize};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
+
+use crate::{
+    net_packet::NetPacket,
+    net_structs::*
+};
+
 
 // Constants
 const NET_PACKET_TYPE_SYN: i16 = 0;
@@ -32,7 +33,6 @@ enum ClientState {
     DisconnectedSleep,
 }
 
-#[derive(Clone, Default)]
 pub struct NetClient {
     connection: NetConnection,
     state: ClientState,
@@ -46,7 +46,7 @@ pub struct NetClient {
     recv_window: Vec<NetFullTicCmd>,
     send_queue: Vec<NetTicDiff>,
     need_acknowledge: bool,
-    gamedata_recv_time: u64,
+    gamedata_recv_time: Instant,
     last_latency: i32,
     net_local_wad_sha1sum: [u8; 20],
     net_local_deh_sha1sum: [u8; 20],
@@ -54,7 +54,7 @@ pub struct NetClient {
     net_waiting_for_launch: bool,
     net_client_connected: bool,
     net_client_received_wait_data: bool,
-    net_client_wait_data: NetWaitdata,
+    net_client_wait_data: NetWaitData,
     last_send_time: Instant,
     last_ticcmd: TicCmd,
     recvwindow_cmd_base: Vec<TicCmd>,
@@ -66,7 +66,7 @@ impl NetClient {
             connection: NetConnection::default(),
             state: ClientState::default(),
             server_addr: None,
-            context: NetContext::new(),
+            context: NetContext{},
             settings: None,
             reject_reason: None,
             player_name,
@@ -75,8 +75,7 @@ impl NetClient {
             recv_window: vec![NetFullTicCmd::default(); BACKUPTICS],
             send_queue: vec![NetTicDiff::default(); BACKUPTICS],
             need_acknowledge: false,
-            need_acknowledge: false,
-            gamedata_recv_time: 0,
+            gamedata_recv_time: Instant::now(),
             last_latency: 0,
             net_local_wad_sha1sum: [0; 20],
             net_local_deh_sha1sum: [0; 20],
@@ -84,7 +83,7 @@ impl NetClient {
             net_waiting_for_launch: false,
             net_client_connected: false,
             net_client_received_wait_data: false,
-            net_client_wait_data: NetWaitdata::default(),
+            net_client_wait_data: NetWaitData::default(),
             last_send_time: Instant::now(),
             last_ticcmd: TicCmd::default(),
             recvwindow_cmd_base: vec![TicCmd::default(); NET_MAXPLAYERS],
@@ -125,7 +124,7 @@ impl NetClient {
         let server_version = packet.read_safe_string().unwrap_or_default();
         let protocol = packet.read_protocol();
 
-        if protocol == Protocol::Unknown {
+        if protocol == NetProtocol::Unknown {
             println!("Client: Error: No common protocol");
             return;
         }
@@ -148,7 +147,7 @@ impl NetClient {
     }
 
     fn send_syn(&self, data: &ConnectData) {
-        let mut packet = NetPacket::new(128); // Use an appropriate initial size
+        let mut packet = NetPacket::new(); // Use an appropriate initial size
         packet.write_i16(NET_PACKET_TYPE_SYN);
         packet.write_i32(NET_DEF_MAGIC_NUMBER);
         packet.write_string("RustNetClient"); // Equivalent to PACKAGE_STRING
@@ -253,28 +252,6 @@ impl NetClient {
         result
     }
 
-    fn parse_syn(&mut self, packet: &mut NetPacket) {
-        println!("Client: Processing SYN response");
-        let server_version = packet.read_string().unwrap_or_default();
-        let protocol = packet.read_protocol();
-
-        if protocol == Protocol::Unknown {
-            println!("Client: Error: No common protocol");
-            return;
-        }
-
-        println!("Client: Connected to server");
-        self.connection.state = ConnectionState::Connected;
-        self.connection.protocol = protocol;
-
-        if server_version != "RustNetClient" {
-            println!(
-                "Client: Warning: This client is '{}', but the server is '{}'. This may cause desynchronization.",
-                "RustNetClient", server_version
-            );
-        }
-    }
-
     fn update_clock_sync(&mut self, seq: u32, remote_latency: i32) {
         const KP: f32 = 0.1;
         const KI: f32 = 0.01;
@@ -301,39 +278,6 @@ impl NetClient {
             "Client: Latency {}, remote {}, offset={}ms, cumul_error={}",
             latency, remote_latency, offset_ms, cumul_error
         );
-    }
-
-    fn parse_reject(&mut self, packet: &mut NetPacket) {
-        if let Some(msg) = packet.read_string() {
-            if self.connection.state == ConnectionState::Connecting {
-                self.connection.state = ConnectionState::Disconnected;
-                self.reject_reason = Some(msg);
-            }
-        }
-    }
-
-    fn parse_waiting_data(&mut self, packet: &mut NetPacket) {
-        if let Some(wait_data) = packet.read_wait_data() {
-            if wait_data.num_players > wait_data.max_players
-                || wait_data.ready_players > wait_data.num_players
-                || wait_data.max_players > NET_MAXPLAYERS as u8
-            {
-                // Insane data
-                return;
-            }
-
-            if (wait_data.consoleplayer >= 0 && self.drone)
-                || (wait_data.consoleplayer < 0 && !self.drone)
-                || (wait_data.consoleplayer as usize >= wait_data.num_players as usize)
-            {
-                // Invalid player number
-                return;
-            }
-
-            // Update waiting data
-            self.net_client_wait_data = wait_data;
-            self.net_client_received_wait_data = true;
-        }
     }
 
     fn parse_launch(&mut self, packet: &mut NetPacket) {
@@ -384,8 +328,8 @@ impl NetClient {
             self.settings = Some(settings);
             self.recv_window_start = 0;
             // Reset recv_window and send_queue
-            self.recv_window = [NetFullTicCmd::default(); BACKUPTICS];
-            self.send_queue = [NetTicDiff::default(); BACKUPTICS];
+            self.recv_window = vec![NetFullTicCmd::default(); BACKUPTICS];
+            self.send_queue = vec![NetTicDiff::default(); BACKUPTICS];
         }
     }
 
@@ -600,7 +544,7 @@ impl NetClient {
             );
 
             // Call D_ReceiveTic or equivalent game state update function
-            self.receive_tic(&ticcmds, &self.recv_window[0].cmd.playeringame);
+            self.receive_tic(&ticcmds, &self.recv_window[0].cmds.playeringame);
 
             // Shift the window
             self.recv_window.rotate_left(1);
@@ -666,45 +610,6 @@ impl NetClient {
             result.buttons2 = diff.cmd.buttons2;
             result.inventory = diff.cmd.inventory;
         } else {
-            result.inventory = 0;
-        }
-    }
-
-    fn apply_ticcmd_diff(&self, base: &TicCmd, diff: &NetTicDiff, result: &mut TicCmd) {
-        *result = *base;
-
-        if diff.diff & NET_TICDIFF_FORWARD != 0 {
-            result.forwardmove = diff.cmd.forwardmove;
-        }
-        if diff.diff & NET_TICDIFF_SIDE != 0 {
-            result.sidemove = diff.cmd.sidemove;
-        }
-        if diff.diff & NET_TICDIFF_TURN != 0 {
-            result.angleturn = diff.cmd.angleturn;
-        }
-        if diff.diff & NET_TICDIFF_BUTTONS != 0 {
-            result.buttons = diff.cmd.buttons;
-        }
-        if diff.diff & NET_TICDIFF_CONSISTANCY != 0 {
-            result.consistancy = diff.cmd.consistancy;
-        }
-        if diff.diff & NET_TICDIFF_CHATCHAR != 0 {
-            result.chatchar = diff.cmd.chatchar;
-        } else {
-            result.chatchar = 0;
-        }
-        if diff.diff & NET_TICDIFF_RAVEN != 0 {
-            result.lookfly = diff.cmd.lookfly;
-            result.arti = diff.cmd.arti;
-        } else {
-            result.lookfly = 0;
-            result.arti = 0;
-        }
-        if diff.diff & NET_TICDIFF_STRIFE != 0 {
-            result.buttons2 = diff.cmd.buttons2;
-            result.inventory = diff.cmd.inventory;
-        } else {
-            result.buttons2 = 0;
             result.inventory = 0;
         }
     }
@@ -800,15 +705,6 @@ impl NetClient {
         ticcmd.angleturn = 0;
     }
 
-    fn generate_bot_ticcmd(&self, ticcmd: &mut TicCmd) {
-        // Implement bot AI logic here
-        // This is a placeholder implementation
-        let mut rng = rand::thread_rng();
-        ticcmd.forwardmove = rng.gen_range(-50..50);
-        ticcmd.sidemove = rng.gen_range(-50..50);
-        ticcmd.angleturn = rng.gen_range(0..65535);
-        // Set other fields as needed
-    }
 
     pub fn disconnect(&mut self) {
         if !self.net_client_connected {
@@ -837,39 +733,6 @@ impl NetClient {
         self.shutdown();
     }
 
-    pub fn disconnect(&mut self) {
-        if !self.net_client_connected {
-            return;
-        }
-
-        println!("Client: Beginning disconnect");
-        self.connection.disconnect();
-
-        let start_time = Instant::now();
-        while self.connection.state != ConnectionState::Disconnected
-            && self.connection.state != ConnectionState::DisconnectedSleep
-        {
-            if start_time.elapsed() > Duration::from_secs(5) {
-                println!("Client: No acknowledgment of disconnect received");
-                self.state = ClientState::WaitingStart;
-                eprintln!("NET_CL_Disconnect: Timeout while disconnecting from server");
-                break;
-            }
-
-            self.run();
-            thread::sleep(Duration::from_millis(1));
-        }
-
-        println!("Client: Disconnect complete");
-        self.shutdown();
-    }
-
-    fn shutdown(&mut self) {
-        if self.connection.connected {
-            self.connection.disconnect();
-        }
-        self.state = ClientState::Disconnected;
-    }
 
     pub fn get_settings(&self) -> Option<GameSettings> {
         if self.state != ClientState::InGame {
@@ -958,7 +821,7 @@ enum ConnectionState {
 #[derive(Default)]
 pub struct NetConnection {
     pub state: ConnectionState,
-    pub protocol: Protocol,
+    pub protocol: NetProtocol,
     pub connected: bool,
 }
 
@@ -966,7 +829,7 @@ impl NetConnection {
     fn new() -> Self {
         NetConnection {
             state: ConnectionState::Disconnected,
-            protocol: Protocol::Unknown,
+            protocol: NetProtocol::Unknown,
             connected: false,
         }
     }
@@ -987,13 +850,6 @@ impl NetConnection {
         self.state = ConnectionState::Disconnected;
         self.connected = false;
     }
-}
-
-#[derive(Debug, Default, PartialEq)]
-pub enum Protocol {
-    #[default]
-    Unknown,
-    // Other protocols as needed
 }
 
 #[cfg(test)]

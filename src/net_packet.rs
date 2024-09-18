@@ -1,7 +1,8 @@
+use serde::{Serialize, Deserialize};
 use std::convert::TryInto;
-use std::fmt;
 
 /// Structure that represents a network packet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetPacket {
     pub data: Vec<u8>,
     pub pos: usize,
@@ -9,9 +10,9 @@ pub struct NetPacket {
 
 impl NetPacket {
     /// Creates a new network packet with a specified initial size.
-    pub fn new(initial_size: usize) -> Self {
+    pub fn new() -> Self {
         NetPacket {
-            data: Vec::with_capacity(initial_size),
+            data: Vec::new(),
             pos: 0,
         }
     }
@@ -147,23 +148,13 @@ impl NetPacket {
     }
 }
 
-impl fmt::Debug for NetPacket {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let data_str: Vec<String> = self.data.iter().map(|b| format!("{:02X}", b)).collect();
-        f.debug_struct("NetPacket")
-            .field("data", &data_str.join(" "))
-            .field("pos", &self.pos)
-            .finish()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_write_and_read_u8() {
-        let mut packet = NetPacket::new(10);
+        let mut packet = NetPacket::new();
         packet.write_u8(255);
         packet.reset();
         assert_eq!(packet.read_u8(), Some(255));
@@ -171,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_write_and_read_i8() {
-        let mut packet = NetPacket::new(10);
+        let mut packet = NetPacket::new();
         packet.write_i8(-128);
         packet.reset();
         assert_eq!(packet.read_i8(), Some(-128));
@@ -179,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_write_and_read_u16() {
-        let mut packet = NetPacket::new(10);
+        let mut packet = NetPacket::new();
         packet.write_u16(65535);
         packet.reset();
         assert_eq!(packet.read_u16(), Some(65535));
@@ -187,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_write_and_read_i16() {
-        let mut packet = NetPacket::new(10);
+        let mut packet = NetPacket::new();
         packet.write_i16(-12345);
         packet.reset();
         assert_eq!(packet.read_i16(), Some(-12345));
@@ -195,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_write_and_read_u32() {
-        let mut packet = NetPacket::new(10);
+        let mut packet = NetPacket::new();
         packet.write_u32(4294967295);
         packet.reset();
         assert_eq!(packet.read_u32(), Some(4294967295));
@@ -203,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_write_and_read_i32() {
-        let mut packet = NetPacket::new(10);
+        let mut packet = NetPacket::new();
         packet.write_i32(-123456789);
         packet.reset();
         assert_eq!(packet.read_i32(), Some(-123456789));
@@ -211,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_write_and_read_string() {
-        let mut packet = NetPacket::new(20);
+        let mut packet = NetPacket::new();
         packet.write_string("Hello");
         packet.reset();
         assert_eq!(packet.read_string(), Some("Hello".to_string()));
@@ -219,7 +210,7 @@ mod tests {
 
     #[test]
     fn test_write_and_read_safe_string() {
-        let mut packet = NetPacket::new(20);
+        let mut packet = NetPacket::new();
         packet.write_string("Hello\x00World\x1F!");
         packet.reset();
         assert_eq!(packet.read_safe_string(), Some("Hello".to_string()));
@@ -227,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_dup_packet() {
-        let mut packet = NetPacket::new(10);
+        let mut packet = NetPacket::new();
         packet.write_u8(100);
         let dup = packet.dup();
         let mut dup_packet = dup;
@@ -236,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_free_packet() {
-        let mut packet = NetPacket::new(10);
+        let mut packet = NetPacket::new();
         packet.write_u8(50);
         packet.free();
         assert_eq!(packet.read_u8(), None);
@@ -246,7 +237,7 @@ mod tests {
 
     #[test]
     fn test_reset_position() {
-        let mut packet = NetPacket::new(10);
+        let mut packet = NetPacket::new();
         packet.write_u8(1);
         packet.write_u8(2);
         packet.reset();
@@ -255,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_debug_trait() {
-        let mut packet = NetPacket::new(10);
+        let mut packet = NetPacket::new();
         packet.write_u8(0xAB);
         packet.write_u8(0xCD);
         packet.write_u8(0xEF);
