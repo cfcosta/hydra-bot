@@ -1,5 +1,5 @@
-use std::time::{Duration, Instant};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::net_packet::NetPacket;
 use crate::net_structs::*;
@@ -416,7 +416,8 @@ impl NetClient {
         packet.write_i32(start as i32);
         packet.write_u8((end - start + 1) as u8);
 
-        self.connection.send_packet(&mut packet, self.server_addr.as_ref().unwrap());
+        self.connection
+            .send_packet(&mut packet, self.server_addr.as_ref().unwrap());
 
         let now = Instant::now();
         for i in start..=end {
@@ -432,7 +433,8 @@ impl NetClient {
         packet.write_u16(NET_PACKET_TYPE_GAMEDATA_ACK);
         packet.write_u8((self.recv_window_start & 0xff) as u8);
 
-        self.connection.send_packet(&mut packet, self.server_addr.as_ref().unwrap());
+        self.connection
+            .send_packet(&mut packet, self.server_addr.as_ref().unwrap());
         self.need_acknowledge = false;
         println!("Client: Game data acknowledgment sent");
     }
@@ -455,7 +457,8 @@ impl NetClient {
             }
         }
 
-        self.connection.send_packet(&mut packet, self.server_addr.as_ref().unwrap());
+        self.connection
+            .send_packet(&mut packet, self.server_addr.as_ref().unwrap());
         self.need_acknowledge = false;
         println!("Client: Sent tics from {} to {}", start, end);
     }
@@ -519,11 +522,10 @@ impl NetClient {
     fn advance_window(&mut self) {
         while self.recv_window[0].active {
             let mut ticcmds = [TicCmd::default(); NET_MAXPLAYERS];
-            self.expand_full_ticcmd(
-                &self.recv_window[0].cmd,
-                self.recv_window_start,
-                &mut ticcmds,
-            );
+            let window_start = self.recv_window_start;
+
+            let window = self.recv_window[0].cmd;
+            self.expand_full_ticcmd(&window, window_start, &mut ticcmds);
 
             // Call D_ReceiveTic or equivalent game state update function
             self.receive_tic(&ticcmds, &self.recv_window[0].cmd.playeringame);
@@ -546,21 +548,27 @@ impl NetClient {
         seq: u32,
         ticcmds: &mut [TicCmd; NET_MAXPLAYERS],
     ) {
+        let consoleplayer = self.settings.as_ref().unwrap().consoleplayer as usize;
+        let drone = self.drone;
+        let mut recvwindow_cmd_base = self.recvwindow_cmd_base.clone();
+
         for i in 0..NET_MAXPLAYERS {
-            if i == self.settings.as_ref().unwrap().consoleplayer as usize && !self.drone {
+            if i == consoleplayer && !drone {
                 continue;
             }
 
             if cmd.playeringame[i] {
                 let diff = &cmd.cmds[i];
-                let mut base = self.recvwindow_cmd_base[i];
-                self.apply_ticcmd_diff(&mut base, diff, &mut ticcmds[i]);
-                self.recvwindow_cmd_base[i] = ticcmds[i];
+                let mut base = recvwindow_cmd_base[i];
+                NetClient::apply_ticcmd_diff(&mut base, diff, &mut ticcmds[i]);
+                recvwindow_cmd_base[i] = ticcmds[i];
             }
         }
+
+        self.recvwindow_cmd_base = recvwindow_cmd_base;
     }
 
-    fn apply_ticcmd_diff(&self, base: &mut TicCmd, diff: &NetTicDiff, result: &mut TicCmd) {
+    fn apply_ticcmd_diff(base: &mut TicCmd, diff: &NetTicDiff, result: &mut TicCmd) {
         *result = *base;
 
         if diff.diff & NET_TICDIFF_FORWARD != 0 {
@@ -595,6 +603,8 @@ impl NetClient {
         } else {
             result.inventory = 0;
         }
+
+        *base = *result;
     }
 
     fn receive_tic(
@@ -744,8 +754,10 @@ impl NetClient {
         self.state = ClientState::Disconnected;
         self.reject_reason = Some("Unknown reason".to_string());
 
-        self.net_local_wad_sha1sum.copy_from_slice(&connect_data.wad_sha1sum);
-        self.net_local_deh_sha1sum.copy_from_slice(&connect_data.deh_sha1sum);
+        self.net_local_wad_sha1sum
+            .copy_from_slice(&connect_data.wad_sha1sum);
+        self.net_local_deh_sha1sum
+            .copy_from_slice(&connect_data.deh_sha1sum);
         self.net_local_is_freedoom = connect_data.is_freedoom != 0;
 
         self.net_client_connected = true;
@@ -794,11 +806,11 @@ impl NetClient {
         packet.write_connect_data(data);
         packet.write_string(&self.player_name);
 
-        self.connection.send_packet(&mut packet, self.server_addr.as_ref().unwrap());
+        self.connection
+            .send_packet(&mut packet, self.server_addr.as_ref().unwrap());
         println!("Client: SYN sent");
     }
 }
-
 
 #[cfg(test)]
 mod tests {
