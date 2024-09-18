@@ -17,23 +17,6 @@ impl NetPacket {
         }
     }
 
-    /// Duplicates an existing network packet.
-    pub fn dup(&self) -> Self {
-        NetPacket {
-            data: self.data.clone(),
-            pos: self.pos,
-        }
-    }
-
-    /// Frees the network packet.
-    /// In Rust, manual memory management is not necessary,
-    /// but this method is provided to maintain compatibility with the C implementation.
-    pub fn free(&mut self) {
-        self.data.clear();
-        self.pos = 0;
-    }
-
-    /// Writes an unsigned 8-bit integer to the packet.
     /// Writes an unsigned 8-bit integer to the packet.
     pub fn write_u8(&mut self, value: u8) {
         self.data.push(value);
@@ -44,7 +27,6 @@ impl NetPacket {
         self.data.push(value as u8);
     }
 
-    /// Writes an unsigned 16-bit integer in big-endian order to the packet.
     /// Writes an unsigned 16-bit integer in big-endian order to the packet.
     pub fn write_u16(&mut self, value: u16) {
         self.data.extend(&value.to_be_bytes());
@@ -214,25 +196,6 @@ mod tests {
         packet.write_string("Hello\x00World\x1F!");
         packet.reset();
         assert_eq!(packet.read_safe_string(), Some("Hello".to_string()));
-    }
-
-    #[test]
-    fn test_dup_packet() {
-        let mut packet = NetPacket::new();
-        packet.write_u8(100);
-        let dup = packet.dup();
-        let mut dup_packet = dup;
-        assert_eq!(dup_packet.read_u8(), Some(100));
-    }
-
-    #[test]
-    fn test_free_packet() {
-        let mut packet = NetPacket::new();
-        packet.write_u8(50);
-        packet.free();
-        assert_eq!(packet.read_u8(), None);
-        assert_eq!(packet.data.len(), 0);
-        assert_eq!(packet.pos, 0);
     }
 
     #[test]
