@@ -17,10 +17,9 @@
 #ifndef NET_CLIENT_H
 #define NET_CLIENT_H
 
-#include "doomtype.h"
 #include "d_ticcmd.h"
-#include "sha1.h"
 #include "net_defs.h"
+#include "sha1.h"
 
 boolean NET_CL_Connect(net_addr_t *addr, net_connect_data_t *data);
 boolean NET_CL_ConnectWebsockets(net_addr_t *addr, net_connect_data_t *data);
