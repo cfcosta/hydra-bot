@@ -37,7 +37,7 @@ impl NetClient {
         NetClient {
             socket: UdpSocket::bind("0.0.0.0:0").expect("Failed to bind UDP socket"),
             state: ClientState::Disconnected,
-            server_addr: "127.0.0.1:0".parse().unwrap(), // Placeholder
+            server_addr: "127.0.0.1:2342".parse().unwrap(), // Placeholder
             settings: None,
             reject_reason: None,
             player_name,

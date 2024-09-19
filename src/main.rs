@@ -20,7 +20,7 @@ fn main() {
 
     info!("Client initialized, attempting to connect");
 
-    let server_addr: SocketAddr = "127.0.0.1:12345".parse().expect("Invalid server address");
+    let server_addr: SocketAddr = "127.0.0.1:2342".parse().expect("Invalid server address");
 
     let connect_data = ConnectData {
         gamemode: 0,

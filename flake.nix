@@ -63,37 +63,13 @@
           buildInputs =
             [
               rust
+              pkgs.chocolate-doom
               pkgs.pkg-config
               pkgs.openssl
-              pkgs.python312Packages.virtualenvwrapper
             ]
             ++ optionals isDarwin [
               pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
             ];
-
-          shellHook =
-            let
-              lib-path = pkgs.lib.makeLibraryPath [
-                pkgs.libffi
-                pkgs.openssl
-                pkgs.stdenv.cc.cc
-              ];
-            in
-            ''
-              # Augment the dynamic linker path
-              export LD_LIBRARY_PATH="${lib-path}"
-              SOURCE_DATE_EPOCH=$(date +%s)
-
-              if test ! -d .venv; then
-                virtualenv .venv
-              fi
-
-              source ./.venv/bin/activate
-
-              export PYTHONPATH=`pwd`/.venv/${pkgs.python312.sitePackages}/:$PYTHONPATH
-
-              [ -e .venv/bin/aider ] || pip install git+https://github.com/paul-gauthier/aider.git
-            '';
         };
       }
     );
