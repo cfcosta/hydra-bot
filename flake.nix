@@ -6,24 +6,6 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
 
-    cardano-node.url = "github:intersectmbo/cardano-node/9.0.0";
-    hydra.url = "github:cardano-scaling/hydra/0.17.0";
-
-    gitignore = {
-      url = "github:hercules-ci/gitignore.nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
-
-  nixConfig = {
-    trusted-public-keys = [
-      "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-      "hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ="
-    ];
-    substituters = [
-      "https://cache.nixos.org/"
-      "https://cache.iog.io/"
-    ];
   };
 
   outputs =
@@ -31,8 +13,6 @@
       nixpkgs,
       rust-overlay,
       flake-utils,
-      cardano-node,
-      hydra,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -82,11 +62,6 @@
         devShells.default = mkShell {
           buildInputs =
             [
-              # Runtime dependencies
-              cardano-node.packages.${system}.cardano-cli
-              hydra.packages.${system}.hydra-node
-
-              # Rust Environment
               rust
               pkgs.pkg-config
               pkgs.openssl
@@ -106,7 +81,7 @@
             in
             ''
               # Augment the dynamic linker path
-              export "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${lib-path}"
+              export LD_LIBRARY_PATH="${lib-path}"
               SOURCE_DATE_EPOCH=$(date +%s)
 
               if test ! -d .venv; then
@@ -114,7 +89,10 @@
               fi
 
               source ./.venv/bin/activate
+
               export PYTHONPATH=`pwd`/.venv/${pkgs.python312.sitePackages}/:$PYTHONPATH
+
+              [ -e .venv/bin/aider ] || pip install git+https://github.com/paul-gauthier/aider.git
             '';
         };
       }
