@@ -1,5 +1,9 @@
 use serde::{Serialize, Deserialize};
 use std::convert::TryInto;
+use std::io::{self, Read, Write};
+use std::net::UdpSocket;
+
+use crate::net_structs::*;
 
 /// Structure that represents a network packet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,7 +13,7 @@ pub struct NetPacket {
 }
 
 impl NetPacket {
-    /// Creates a new network packet with a specified initial size.
+    /// Creates a new network packet.
     pub fn new() -> Self {
         NetPacket {
             data: Vec::new(),
@@ -18,7 +22,7 @@ impl NetPacket {
     }
 
     /// Reads a ticcmd diff from the packet.
-    fn read_ticcmd_diff(&mut self, lowres_turn: bool) -> Option<NetTicDiff> {
+    pub fn read_ticcmd_diff(&mut self, lowres_turn: bool) -> Option<NetTicDiff> {
         let mut diff = NetTicDiff::default();
         diff.diff = self.read_u8()? as u32;
 
@@ -94,10 +98,6 @@ impl NetPacket {
         self.data.extend(&value.to_be_bytes());
     }
 
-    fn write_blob(&mut self, buf: &[u8]) {
-        self.data.extend_from_slice(buf);
-    }
-
     /// Writes a signed 32-bit integer in big-endian order to the packet.
     pub fn write_i32(&mut self, value: i32) {
         self.data.extend(&value.to_be_bytes());
@@ -105,12 +105,7 @@ impl NetPacket {
 
     /// Writes a string to the packet, terminated with a NUL byte.
     pub fn write_string(&mut self, string: &str) {
-        let bytes = string.as_bytes();
-        for &b in bytes {
-            if b != 0 {
-                self.data.push(b);
-            }
-        }
+        self.data.extend_from_slice(string.as_bytes());
         self.data.push(0); // NUL terminator
     }
 
@@ -175,56 +170,9 @@ impl NetPacket {
         }
     }
 
-    /// Reads a safe string from the packet, filtering out non-printable characters.
-    /// Returns `None` if a terminating NUL byte is not found.
-    pub fn read_safe_string(&mut self) -> Option<String> {
-        self.read_string().map(|s| {
-            s.chars()
-                .filter(|c| c.is_ascii_graphic() || c.is_whitespace())
-                .collect()
-        })
-    }
-
-    fn read_sha1sum(&mut self, digest: &mut [u8; 20]) -> Option<()> {
-        if self.pos + 20 <= self.data.len() {
-            digest.copy_from_slice(&self.data[self.pos..self.pos + 20]);
-            self.pos += 20;
-            Some(())
-        } else {
-            None
-        }
-    }
-
     /// Resets the reading position to the beginning of the packet.
     pub fn reset(&mut self) {
         self.pos = 0;
-    }
-
-    /// Reads a protocol from the packet.
-    pub fn read_protocol(&mut self) -> NetProtocol {
-        if let Some(name) = self.read_string() {
-            match name.as_str() {
-                "CHOCOLATE_DOOM_0" => NetProtocol::ChocolateDoom0,
-                _ => NetProtocol::Unknown,
-            }
-        } else {
-            NetProtocol::Unknown
-        }
-    }
-
-    /// Writes a protocol list to the packet.
-    pub fn write_protocol_list(&mut self) {
-        self.write_u8(1); // Number of protocols
-        self.write_protocol(NetProtocol::ChocolateDoom0);
-    }
-
-    /// Writes a protocol to the packet.
-    pub fn write_protocol(&mut self, protocol: NetProtocol) {
-        let name = match protocol {
-            NetProtocol::ChocolateDoom0 => "CHOCOLATE_DOOM_0",
-            _ => panic!("NET_WriteProtocol: Unknown protocol {:?}", protocol),
-        };
-        self.write_string(name);
     }
 
     /// Writes connect data to the packet.
@@ -235,8 +183,8 @@ impl NetPacket {
         self.write_u8(data.drone as u8);
         self.write_u8(data.max_players as u8);
         self.write_u8(data.is_freedoom as u8);
-        self.write_blob(&data.wad_sha1sum);
-        self.write_blob(&data.deh_sha1sum);
+        self.data.extend_from_slice(&data.wad_sha1sum);
+        self.data.extend_from_slice(&data.deh_sha1sum);
         self.write_u8(data.player_class as u8);
     }
 
@@ -267,8 +215,10 @@ impl NetPacket {
                 data.player_addrs[i][j] = c;
             }
         }
-        self.read_sha1sum(&mut data.wad_sha1sum)?;
-        self.read_sha1sum(&mut data.deh_sha1sum)?;
+        self.data[self.pos..self.pos + 20].copy_from_slice(&mut data.wad_sha1sum);
+        self.pos += 20;
+        self.data[self.pos..self.pos + 20].copy_from_slice(&mut data.deh_sha1sum);
+        self.pos += 20;
         data.is_freedoom = self.read_u8()? as i32;
         Some(data)
     }
@@ -383,9 +333,21 @@ impl NetPacket {
             self.write_i16(diff.cmd.inventory as i16);
         }
     }
-}
 
-use crate::net_structs::*;
+    /// Sends the packet over UDP.
+    pub fn send(&self, socket: &UdpSocket, addr: &std::net::SocketAddr) -> io::Result<usize> {
+        socket.send_to(&self.data, addr)
+    }
+
+    /// Receives a packet over UDP.
+    pub fn receive(socket: &UdpSocket) -> io::Result<(Self, std::net::SocketAddr)> {
+        let mut buf = [0u8; 1024]; // Adjust buffer size as needed
+        let (size, src) = socket.recv_from(&mut buf)?;
+        let mut packet = NetPacket::new();
+        packet.data.extend_from_slice(&buf[..size]);
+        Ok((packet, src))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -448,30 +410,11 @@ mod tests {
     }
 
     #[test]
-    fn test_write_and_read_safe_string() {
-        let mut packet = NetPacket::new();
-        packet.write_string("Hello\x00World\x1F!");
-        packet.reset();
-        assert_eq!(packet.read_safe_string(), Some("Hello".to_string()));
-    }
-
-    #[test]
     fn test_reset_position() {
         let mut packet = NetPacket::new();
         packet.write_u8(1);
         packet.write_u8(2);
         packet.reset();
         assert_eq!(packet.read_u8(), Some(1));
-    }
-
-    #[test]
-    fn test_debug_trait() {
-        let mut packet = NetPacket::new();
-        packet.write_u8(0xAB);
-        packet.write_u8(0xCD);
-        packet.write_u8(0xEF);
-        packet.reset();
-        let debug_str = format!("{:?}", packet);
-        assert_eq!(debug_str, "NetPacket { data: \"AB CD EF\", pos: 0 }");
     }
 }
