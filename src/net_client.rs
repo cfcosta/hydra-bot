@@ -1,8 +1,7 @@
-use std::net::{UdpSocket, SocketAddr};
+use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use crate::net_packet::NetPacket;
-use crate::net_structs::*;
+use crate::{bot::*, net_packet::NetPacket, net_structs::*};
 
 const NET_MAGIC_NUMBER: u32 = 1454104972;
 
@@ -30,6 +29,7 @@ pub struct NetClient {
     last_send_time: Instant,
     last_ticcmd: TicCmd,
     recvwindow_cmd_base: Vec<TicCmd>,
+    bot: Bot,
 }
 
 impl NetClient {
@@ -58,11 +58,12 @@ impl NetClient {
             last_send_time: Instant::now(),
             last_ticcmd: TicCmd::default(),
             recvwindow_cmd_base: vec![TicCmd::default(); NET_MAXPLAYERS],
+            bot: Bot::new(),
         }
     }
 
     pub fn init(&mut self) {
-        self.init_bot();
+        self.bot.init();
         self.net_client_connected = false;
         self.net_client_received_wait_data = false;
         self.net_waiting_for_launch = false;
@@ -74,13 +75,6 @@ impl NetClient {
                     .or_else(|_| std::env::var("USERNAME"))
                     .unwrap_or_else(|_| NetClient::get_random_pet_name())
             });
-        }
-    }
-
-    fn init_bot(&mut self) {
-        if self.drone {
-            // Initialize bot-specific settings
-            // For example, set bot skill level
         }
     }
 
@@ -111,7 +105,9 @@ impl NetClient {
     }
 
     fn receive_packets(&mut self) {
-        self.socket.set_nonblocking(true).expect("Failed to set non-blocking");
+        self.socket
+            .set_nonblocking(true)
+            .expect("Failed to set non-blocking");
 
         loop {
             match NetPacket::receive(&self.socket) {
@@ -130,7 +126,9 @@ impl NetClient {
             }
         }
 
-        self.socket.set_nonblocking(false).expect("Failed to set blocking");
+        self.socket
+            .set_nonblocking(false)
+            .expect("Failed to set blocking");
     }
 
     fn handle_disconnected(&mut self) {
@@ -404,7 +402,9 @@ impl NetClient {
         packet.write_i32(start as i32);
         packet.write_u8((end - start + 1) as u8);
 
-        packet.send(&self.socket, &self.server_addr).expect("Failed to send packet");
+        packet
+            .send(&self.socket, &self.server_addr)
+            .expect("Failed to send packet");
 
         let now = Instant::now();
         for i in start..=end {
@@ -420,7 +420,9 @@ impl NetClient {
         packet.write_u16(NetPacketType::GameDataAck as u16);
         packet.write_u8((self.recv_window_start & 0xff) as u8);
 
-        packet.send(&self.socket, &self.server_addr).expect("Failed to send packet");
+        packet
+            .send(&self.socket, &self.server_addr)
+            .expect("Failed to send packet");
         self.need_acknowledge = false;
         println!("Client: Game data acknowledgment sent");
     }
@@ -439,11 +441,16 @@ impl NetClient {
         for tic in start..=end {
             if let Some(send_obj) = self.send_queue.get(tic as usize % BACKUPTICS) {
                 packet.write_i16(self.last_latency.try_into().unwrap());
-                packet.write_ticcmd_diff(&send_obj.cmd, self.settings.as_ref().unwrap().lowres_turn != 0);
+                packet.write_ticcmd_diff(
+                    &send_obj.cmd,
+                    self.settings.as_ref().unwrap().lowres_turn != 0,
+                );
             }
         }
 
-        packet.send(&self.socket, &self.server_addr).expect("Failed to send packet");
+        packet
+            .send(&self.socket, &self.server_addr)
+            .expect("Failed to send packet");
         self.need_acknowledge = false;
         println!("Client: Sent tics from {} to {}", start, end);
     }
@@ -475,28 +482,35 @@ impl NetClient {
         if self.last_ticcmd.forwardmove != ticcmd.forwardmove {
             diff.diff |= NET_TICDIFF_FORWARD;
         }
+
         if self.last_ticcmd.sidemove != ticcmd.sidemove {
             diff.diff |= NET_TICDIFF_SIDE;
         }
+
         if self.last_ticcmd.angleturn != ticcmd.angleturn {
             diff.diff |= NET_TICDIFF_TURN;
         }
+
         if self.last_ticcmd.buttons != ticcmd.buttons {
             diff.diff |= NET_TICDIFF_BUTTONS;
         }
+
         if self.last_ticcmd.consistancy != ticcmd.consistancy {
             diff.diff |= NET_TICDIFF_CONSISTANCY;
         }
+
         if ticcmd.chatchar != 0 {
             diff.diff |= NET_TICDIFF_CHATCHAR;
         } else {
             diff.cmd.chatchar = 0;
         }
+
         if self.last_ticcmd.lookfly != ticcmd.lookfly || ticcmd.arti != 0 {
             diff.diff |= NET_TICDIFF_RAVEN;
         } else {
             diff.cmd.arti = 0;
         }
+
         if self.last_ticcmd.buttons2 != ticcmd.buttons2 || ticcmd.inventory != 0 {
             diff.diff |= NET_TICDIFF_STRIFE;
         } else {
@@ -597,8 +611,7 @@ impl NetClient {
         ticcmds: &[TicCmd; NET_MAXPLAYERS],
         playeringame: &[bool; NET_MAXPLAYERS],
     ) {
-        // This function should update the game state with the new ticcmds
-        // It's a placeholder for the actual game logic update
+        // TODO: This function should update the game state with the new ticcmds
         println!(
             "Client: Received tic data for {} players",
             playeringame.iter().filter(|&&p| p).count()
@@ -628,6 +641,7 @@ impl NetClient {
                 if resend_start < 0 {
                     resend_start = i as i32;
                 }
+
                 resend_end = i as i32;
             } else if resend_start >= 0 {
                 println!(
@@ -635,6 +649,7 @@ impl NetClient {
                     self.recv_window_start + resend_start as u32,
                     self.recv_window_start + resend_end as u32
                 );
+
                 self.send_resend_request(
                     self.recv_window_start + resend_start as u32,
                     self.recv_window_start + resend_end as u32,
@@ -669,18 +684,10 @@ impl NetClient {
     fn run_bot(&mut self) {
         if self.state == ClientState::InGame && self.drone {
             let maketic = self.recv_window_start + BACKUPTICS as u32;
-            let mut bot_ticcmd = TicCmd::default();
-            self.generate_bot_ticcmd(&mut bot_ticcmd);
-            self.send_ticcmd(&bot_ticcmd, maketic);
-        }
-    }
 
-    fn generate_bot_ticcmd(&self, ticcmd: &mut TicCmd) {
-        // Implement bot AI logic here
-        // Placeholder for bot commands
-        ticcmd.forwardmove = 50;
-        ticcmd.sidemove = 0;
-        ticcmd.angleturn = 0;
+            let cmd = self.bot.tick();
+            self.send_ticcmd(&cmd, maketic);
+        }
     }
 
     pub fn disconnect(&mut self) {
@@ -692,6 +699,7 @@ impl NetClient {
         self.send_disconnect();
 
         let start_time = Instant::now();
+
         while self.state != ClientState::Disconnected {
             if start_time.elapsed() > Duration::from_secs(5) {
                 println!("Client: No acknowledgment of disconnect received");
@@ -711,7 +719,9 @@ impl NetClient {
     fn send_disconnect(&self) {
         let mut packet = NetPacket::new();
         packet.write_u16(NetPacketType::Disconnect as u16);
-        packet.send(&self.socket, &self.server_addr).expect("Failed to send disconnect packet");
+        packet
+            .send(&self.socket, &self.server_addr)
+            .expect("Failed to send disconnect packet");
     }
 
     pub fn get_settings(&self) -> Option<GameSettings> {
@@ -724,7 +734,9 @@ impl NetClient {
     pub fn launch_game(&mut self) {
         let mut packet = NetPacket::new();
         packet.write_u16(NetPacketType::Launch as u16);
-        packet.send(&self.socket, &self.server_addr).expect("Failed to send launch packet");
+        packet
+            .send(&self.socket, &self.server_addr)
+            .expect("Failed to send launch packet");
     }
 
     pub fn start_game(&mut self, settings: &GameSettings) {
@@ -733,7 +745,9 @@ impl NetClient {
         let mut packet = NetPacket::new();
         packet.write_u16(NetPacketType::GameStart as u16);
         packet.write_settings(settings);
-        packet.send(&self.socket, &self.server_addr).expect("Failed to send game start packet");
+        packet
+            .send(&self.socket, &self.server_addr)
+            .expect("Failed to send game start packet");
     }
 
     pub fn connect(&mut self, addr: SocketAddr, connect_data: ConnectData) -> bool {
@@ -741,8 +755,10 @@ impl NetClient {
         self.state = ClientState::Disconnected;
         self.reject_reason = Some("Unknown reason".to_string());
 
-        self.net_local_wad_sha1sum.copy_from_slice(&connect_data.wad_sha1sum);
-        self.net_local_deh_sha1sum.copy_from_slice(&connect_data.deh_sha1sum);
+        self.net_local_wad_sha1sum
+            .copy_from_slice(&connect_data.wad_sha1sum);
+        self.net_local_deh_sha1sum
+            .copy_from_slice(&connect_data.deh_sha1sum);
         self.net_local_is_freedoom = connect_data.is_freedoom != 0;
 
         self.net_client_connected = true;
@@ -770,11 +786,14 @@ impl NetClient {
 
         if self.state == ClientState::WaitingLaunch {
             println!("Client: Successfully connected");
+
             self.reject_reason = None;
             self.drone = connect_data.drone != 0;
+
             true
         } else {
             println!("Client: Connection failed");
+
             self.shutdown();
             false
         }
@@ -782,13 +801,16 @@ impl NetClient {
 
     fn send_syn(&self, data: &ConnectData) {
         let mut packet = NetPacket::new();
+
         packet.write_u16(NetPacketType::Syn as u16);
         packet.write_u32(NET_MAGIC_NUMBER);
         packet.write_string(env!("CARGO_PKG_VERSION"));
         packet.write_connect_data(data);
         packet.write_string(&self.player_name);
 
-        packet.send(&self.socket, &self.server_addr).expect("Failed to send SYN packet");
+        packet
+            .send(&self.socket, &self.server_addr)
+            .expect("Failed to send SYN packet");
         println!("Client: SYN sent");
     }
 }

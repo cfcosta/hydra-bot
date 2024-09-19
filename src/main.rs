@@ -3,6 +3,7 @@
 mod net_client;
 mod net_packet;
 mod net_structs;
+mod bot;
 
 use std::net::SocketAddr;
 use tracing::info;
@@ -19,10 +20,8 @@ fn main() {
 
     info!("Client initialized, attempting to connect");
 
-    // Example server address (replace with actual server address)
     let server_addr: SocketAddr = "127.0.0.1:12345".parse().expect("Invalid server address");
 
-    // Example connect data (replace with actual game data)
     let connect_data = ConnectData {
         gamemode: 0,
         gamemission: 0,
