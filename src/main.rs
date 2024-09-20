@@ -1,9 +1,10 @@
 #![allow(unused)]
 
+mod bot;
+mod d_loop;
 mod net_client;
 mod net_packet;
 mod net_structs;
-mod bot;
 
 use std::net::SocketAddr;
 use tracing::info;
@@ -37,8 +38,18 @@ fn main() {
     if client.connect(server_addr, connect_data) {
         info!("Connected to server, starting main loop");
 
+        // Initialize the game loop
+        d_loop::d_start_game_loop();
+
         loop {
+            // Run the network client
             client.run();
+
+            // Run the game loop
+            d_loop::try_run_tics(&mut client);
+
+            // Update the network state
+            d_loop::net_update(&mut client);
 
             // Add some delay to prevent busy-waiting
             std::thread::sleep(std::time::Duration::from_millis(10));

@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use std::io::{self, Read, Write};
 use std::net::UdpSocket;

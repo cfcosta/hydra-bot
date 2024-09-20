@@ -62,6 +62,10 @@ impl NetClient {
         }
     }
 
+    pub fn is_connected(&self) -> bool {
+        self.net_client_connected
+    }
+
     pub fn init(&mut self) {
         self.bot.init();
         self.net_client_connected = false;
